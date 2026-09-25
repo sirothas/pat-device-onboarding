@@ -71,14 +71,17 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install --global wix --version ${{ env.WIX_VERSION }}
-          wix extension add WixToolset.Bal.wixext/${{ env.WIX_VERSION }}
+          # WiX 5 names this extension WixToolset.BootstrapperApplications.wixext. Asking for the old
+          # name (WixToolset.Bal.wixext) installs a package whose DLL WiX then cannot find - reported as
+          # "(damaged)" with exit 0 (builds #2-#5).
+          wix extension add WixToolset.BootstrapperApplications.wixext/${{ env.WIX_VERSION }}
           if ($LASTEXITCODE -ne 0) { throw "wix extension add failed ($LASTEXITCODE)" }
           $list = wix extension list | Out-String
           Write-Host $list
           # Found where it ACTUALLY is, not where it is expected to be: builds #2 and #4 both passed
           # this step and then failed WIX0144 at a path that did not hold the DLL.
-          $dll = Get-ChildItem -Recurse -File -Filter WixToolset.Bal.wixext.dll -Path (Join-Path $PWD '.wix'), (Join-Path $HOME '.wix') -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $dll) { throw "WixToolset.Bal.wixext.dll is nowhere under .wix after extension add" }
+          $dll = Get-ChildItem -Recurse -File -Filter WixToolset.BootstrapperApplications.wixext.dll -Path (Join-Path $PWD '.wix'), (Join-Path $HOME '.wix') -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { throw "WixToolset.BootstrapperApplications.wixext.dll is nowhere under .wix after extension add" }
           Write-Host "Bal extension: $($dll.FullName)"
           "BAL_EXT=$($dll.FullName)" >> $env:GITHUB_ENV
 
