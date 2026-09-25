@@ -10,6 +10,9 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="Data\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Pat.Onboarding.Core\Pat.Onboarding.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -259,3 +259,31 @@ public class PairingClientTests
     [Fact] public void PlainHttpPortalIsRefused() =>
         Assert.Throws<ArgumentException>(() => new PairingClient(new Uri("http://iip.example.test")));
 }
+
+// Interop: an envelope produced by tools/sign-tenant-document.py (openssl DER -> P1363) must verify
+// under the C# verifier. Data/python-signed-envelope.json was signed with the DEV tenant key for
+// https://iip.example.test; the X/Y below are that key's public point (as in TrustedKeys.cs).
+public class SigningToolInteropTests
+{
+    static TrustedKey DevKey() => new TrustedKey("pat-tenant-dev-2026-09",
+        Convert.FromHexString("ce8ad6549cba838f23c5f7a261ea9c2f4923083638b04832489e1f0231c54f16"),
+        Convert.FromHexString("ead05ca68bf652cf1e712a01d52a4517865298f2e7f5a26dce02f55b821a5ef5"));
+
+    static string Envelope() => System.IO.File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "Data", "python-signed-envelope.json"));
+
+    [Fact] public void PythonSignedEnvelopeVerifies()
+    {
+        var t = TenantDocument.Verify(Envelope(), DevKey(), new Uri("https://iip.example.test"), Fixture.Now);
+        Assert.Equal("example", t.Tenant);
+        Assert.Equal("odj.example.test", t.Concentrator);
+    }
+
+    [Fact] public void PythonSignedEnvelopeWithOneBitFlippedIsRefused()
+    {
+        using var d = JsonDocument.Parse(Envelope());
+        var sig = Convert.FromBase64String(d.RootElement.GetProperty("sig").GetString());
+        sig[0] ^= 1;
+        var forged = JsonSerializer.Serialize(new { kid = "pat-tenant-dev-2026-09", doc = d.RootElement.GetProperty("doc").GetString(), sig = Convert.ToBase64String(sig) });
+        Assert.Throws<TrustException>(() => TenantDocument.Verify(forged, DevKey(), new Uri("https://iip.example.test"), Fixture.Now));
+    }
+}

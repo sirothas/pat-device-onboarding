@@ -1,0 +1,49 @@
+<!--
+  PAT-Onboarding.msi - installs the helper. It carries NO secret and NO client value: PORTAL_URL is an
+  optional hint IT may set (trust is decided by the PAT-signed tenant document, not by this value).
+
+  UpgradeCode is FIXED for the life of the product: changing it makes a new version install beside
+  the old one instead of replacing it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="PAT Company Laptop Onboarding"
+           Manufacturer="Parvati Axis Technologies Pvt Ltd"
+           Version="$(Version)"
+           UpgradeCode="ba4af2f4-41ac-4e7e-8e3c-1cad5493168f"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of PAT Company Laptop Onboarding is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="PORTAL_URL" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="PATDIR" Name="PAT">
+        <Directory Id="INSTALLFOLDER" Name="Onboarding" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main">
+      <!-- Every file the helper's Release build produced (the exe, the core library and its
+           System.Text.Json dependencies). -->
+      <Files Directory="INSTALLFOLDER" Include="$(PublishDir)\**" />
+
+      <!-- The bundle launches the helper ELEVATED from this approved path (one UAC prompt, not two). -->
+      <Component Directory="INSTALLFOLDER" Id="HelperPath">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\PAT\Onboarding" Name="HelperPath" Type="string"
+                       Value="[INSTALLFOLDER]PatOnboarding.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Directory="INSTALLFOLDER" Id="PortalHint" Condition="PORTAL_URL">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\PAT\Onboarding" Name="PortalUrl" Type="string"
+                       Value="[PORTAL_URL]" KeyPath="yes" />
+      </Component>
+
+      <Component Directory="ProgramMenuFolder" Id="StartMenu">
+        <Shortcut Id="Shortcut" Name="PAT company laptop onboarding" Target="[INSTALLFOLDER]PatOnboarding.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\PAT\Onboarding" Name="Shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Windows helper. .NET Framework 4.8 ships in Windows 10 1903+ and 11, so there is no
+       runtime to install alongside it. It executes only what Pat.Onboarding.Core has accepted. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>8.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>PatOnboarding</AssemblyName>
+    <RootNamespace>PatOnboarding</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <Version>0.1.0</Version>
+    <Company>Parvati Axis Technologies Pvt Ltd</Company>
+    <Product>PAT Company Laptop Onboarding</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Management" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Pat.Onboarding.Core\Pat.Onboarding.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+Copyright (c) 2026 Parvati Axis Technologies Pvt Ltd. All rights reserved.
+
+The source is published so that the installer can be inspected and its builds verified. No licence
+to use, copy, modify or distribute it is granted except by written agreement with Parvati Axis
+Technologies Pvt Ltd.
+
+(Placeholder pending the licence decision - see pat-platform ADR 0057.)
+
+The bundled OpenVPN community client is distributed unmodified under its own licence (GPLv2);
+see https://openvpn.net/community/ and the OpenVPN installer's own licence text.

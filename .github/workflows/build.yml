@@ -1,0 +1,129 @@
+# Build the installer: test -> helper -> verified OpenVPN MSI -> MSI -> bundle -> hashes -> SBOM
+# -> provenance -> (tags) Release. WiX needs Windows, hence windows-latest.
+#
+# PHASE 3 (code signing) slots in at the three marked steps; until then artifacts are UNSIGNED and
+# SmartScreen will warn. A signed Burn bundle needs its engine signed separately (detach -> sign
+# engine -> reattach -> sign bundle), which is why signing is not a single step at the end.
+name: build
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write        # provenance attestation
+      attestations: write
+    env:
+      WIX_VERSION: "5.0.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.1.${{ github.run_number }}" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Unit tests (every trust decision, both directions)
+        run: dotnet test tests/Pat.Onboarding.Core.Tests -c Release --nologo
+
+      - name: Build the helper
+        run: dotnet publish src/PatOnboarding -c Release -o out/helper -p:Version=${{ steps.v.outputs.version }} --nologo
+
+      - name: Refuse a development trust key on a release tag
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          if (Select-String -Path src/PatOnboarding/TrustedKeys.cs -Pattern 'IsDevelopmentKey = true' -Quiet) {
+            throw "TrustedKeys.cs still trusts the DEVELOPMENT tenant key - a public release must carry the KMS production key"
+          }
+
+      # PHASE 3: sign out/helper/PatOnboarding.exe and Pat.Onboarding.Core.dll here (cloud-HSM CA).
+
+      - name: Fetch and VERIFY the OpenVPN MSI (hash AND Authenticode signer)
+        shell: pwsh
+        run: |
+          $lock = Get-Content installer/openvpn.lock.json -Raw | ConvertFrom-Json
+          Invoke-WebRequest -Uri $lock.url -OutFile out/openvpn.msi
+          $h = (Get-FileHash out/openvpn.msi -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $lock.sha256) { throw "OpenVPN MSI hash $h is not the pinned $($lock.sha256)" }
+          $sig = Get-AuthenticodeSignature out/openvpn.msi
+          if ($sig.Status -ne 'Valid') { throw "OpenVPN MSI signature status: $($sig.Status)" }
+          if ($sig.SignerCertificate.Subject -notlike "*$($lock.signer_subject_contains)*") { throw "OpenVPN MSI is signed by '$($sig.SignerCertificate.Subject)'" }
+          "OpenVPN $($lock.version): sha256 ok, signed by $($sig.SignerCertificate.Subject)"
+
+      - name: WiX
+        run: |
+          dotnet tool install --global wix --version ${{ env.WIX_VERSION }}
+          wix extension add -g WixToolset.Bal.wixext/${{ env.WIX_VERSION }}
+
+      - name: Build the MSI
+        run: wix build installer/Package.wxs -arch x64 -d Version=${{ steps.v.outputs.version }} -d PublishDir=out/helper -o out/PAT-Onboarding.msi
+
+      # PHASE 3: sign out/PAT-Onboarding.msi here.
+
+      - name: Build the bundle
+        run: wix build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext -d Version=${{ steps.v.outputs.version }} -d OpenVpnMsi=out/openvpn.msi -d OnboardingMsi=out/PAT-Onboarding.msi -o out/PAT-Onboarding-Setup.exe
+
+      # PHASE 3: wix burn detach out/PAT-Onboarding-Setup.exe -engine out/engine.exe
+      #          sign out/engine.exe
+      #          wix burn reattach out/PAT-Onboarding-Setup.exe -engine out/engine.exe -o out/PAT-Onboarding-Setup.exe
+      #          sign out/PAT-Onboarding-Setup.exe
+
+      - name: Hashes
+        shell: pwsh
+        run: |
+          Get-FileHash out/PAT-Onboarding-Setup.exe, out/PAT-Onboarding.msi -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content out/SHA256SUMS -Encoding ascii
+          Get-Content out/SHA256SUMS
+
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: out
+          format: cyclonedx-json
+          output-file: out/sbom.cdx.json
+
+      - name: Build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/PAT-Onboarding-Setup.exe
+            out/PAT-Onboarding.msi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pat-onboarding-${{ steps.v.outputs.version }}
+          path: |
+            out/PAT-Onboarding-Setup.exe
+            out/PAT-Onboarding.msi
+            out/SHA256SUMS
+            out/sbom.cdx.json
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release       # required reviewer: nothing is published without a human
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/*/* --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --notes "Verify: sha256sum -c SHA256SUMS; gh attestation verify PAT-Onboarding-Setup.exe --repo ${{ github.repository }}"

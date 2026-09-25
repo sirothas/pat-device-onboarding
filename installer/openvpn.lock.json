@@ -1,0 +1,7 @@
+{
+  "comment": "The OpenVPN community MSI the bundle chains, UNMODIFIED. CI refuses to build unless the download matches sha256 AND carries a valid Authenticode signature whose signer is OpenVPN Inc. Bump version+url+sha256 together, in one reviewed commit.",
+  "version": "2.7.7-I001",
+  "url": "https://swupdate.openvpn.net/community/releases/OpenVPN-2.7.7-I001-amd64.msi",
+  "sha256": "9069a48397c4fd4135fb9c9baea4863c74a465651f67e55a423a433e503100bb",
+  "signer_subject_contains": "OpenVPN Inc."
+}
