@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.wxs text eol=crlf
+*.cs text eol=crlf
+*.csproj text eol=crlf

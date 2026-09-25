@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Everything that decides TRUST lives here, platform-neutral, so it is unit-tested on any OS:
+       the tenant document's signature, the payload's integrity and binding, the tunnel profile.
+       The Windows-only actions (WMI, ACLs, the join API) live in PatOnboarding, and only execute
+       what this library has already accepted. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>8.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+</Project>

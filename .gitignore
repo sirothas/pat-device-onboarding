@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+.vs/
+out/
+*.msi
+*.exe
+!installer/**/*.wxs
+TestResults/
