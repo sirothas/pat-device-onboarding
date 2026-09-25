@@ -22,7 +22,7 @@
     <ApprovedExeForElevation Id="Helper" Key="SOFTWARE\PAT\Onboarding" Value="HelperPath" />
 
     <!-- Optional hint from IT: PAT-Onboarding-Setup.exe PORTAL_URL=https://... -->
-    <Variable Name="PORTAL_URL" bal:Overridable="yes" Value="" />
+    <Variable Name="PORTAL_URL" bal:Overridable="yes" />
 
     <Chain>
       <MsiPackage SourceFile="$(OpenVpnMsi)" Permanent="yes" Vital="yes" Visible="yes" />

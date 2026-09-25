@@ -68,13 +68,17 @@ jobs:
           dotnet tool install --global wix --version ${{ env.WIX_VERSION }}
           wix extension add -g WixToolset.Bal.wixext/${{ env.WIX_VERSION }}
 
+      # WiX runs through tools/wix.ps1, which turns every WiX error/warning line into a GitHub
+      # annotation: those are readable through the PUBLIC API, the raw log is not (anonymous = 403).
       - name: Build the MSI
-        run: wix build installer/Package.wxs -arch x64 -d Version=${{ steps.v.outputs.version }} -d PublishDir=out/helper -o out/PAT-Onboarding.msi
+        shell: pwsh
+        run: ./tools/wix.ps1 build installer/Package.wxs -arch x64 -d Version=${{ steps.v.outputs.version }} -d PublishDir=out/helper -o out/PAT-Onboarding.msi
 
       # PHASE 3: sign out/PAT-Onboarding.msi here.
 
       - name: Build the bundle
-        run: wix build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext -d Version=${{ steps.v.outputs.version }} -d OpenVpnMsi=out/openvpn.msi -d OnboardingMsi=out/PAT-Onboarding.msi -o out/PAT-Onboarding-Setup.exe
+        shell: pwsh
+        run: ./tools/wix.ps1 build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext -d Version=${{ steps.v.outputs.version }} -d OpenVpnMsi=out/openvpn.msi -d OnboardingMsi=out/PAT-Onboarding.msi -o out/PAT-Onboarding-Setup.exe
 
       # PHASE 3: wix burn detach out/PAT-Onboarding-Setup.exe -engine out/engine.exe
       #          sign out/engine.exe
