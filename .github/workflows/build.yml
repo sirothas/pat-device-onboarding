@@ -63,10 +63,19 @@ jobs:
           if ($sig.SignerCertificate.Subject -notlike "*$($lock.signer_subject_contains)*") { throw "OpenVPN MSI is signed by '$($sig.SignerCertificate.Subject)'" }
           "OpenVPN $($lock.version): sha256 ok, signed by $($sig.SignerCertificate.Subject)"
 
+      # The Bal extension is added to the WORKSPACE's .wix folder (searched first by `wix build`), not
+      # the global cache: build #2's `wix extension add -g` reported success yet `wix build` then
+      # failed WIX0144 "extension could not be found" in that global path. And it is LISTED here, so a
+      # missing extension fails in this step, not two steps later.
       - name: WiX
+        shell: pwsh
         run: |
           dotnet tool install --global wix --version ${{ env.WIX_VERSION }}
-          wix extension add -g WixToolset.Bal.wixext/${{ env.WIX_VERSION }}
+          wix extension add WixToolset.Bal.wixext/${{ env.WIX_VERSION }}
+          if ($LASTEXITCODE -ne 0) { throw "wix extension add failed ($LASTEXITCODE)" }
+          $list = wix extension list | Out-String
+          Write-Host $list
+          if ($list -notmatch 'WixToolset\.Bal\.wixext') { throw "WixToolset.Bal.wixext is not installed after extension add" }
 
       # WiX runs through tools/wix.ps1, which turns every WiX error/warning line into a GitHub
       # annotation: those are readable through the PUBLIC API, the raw log is not (anonymous = 403).

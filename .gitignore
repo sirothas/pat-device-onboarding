@@ -7,3 +7,4 @@ out/
 *.exe
 !installer/**/*.wxs
 TestResults/
+.wix/
