@@ -87,12 +87,67 @@ namespace PatOnboarding
         [STAThread]
         private static int Main(string[] args)
         {
+            DebugTrace.Start(args);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => DebugTrace.Crash(e.ExceptionObject as Exception);
+            Application.ThreadException += (s, e) => DebugTrace.Crash(e.Exception);
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+
             string portal = null;
             for (int i = 0; i < args.Length - 1; i++) if (args[i] == "--portal") portal = args[i + 1];
-            if (!Machine.IsElevated()) { MessageBox.Show("Run as administrator.", "PAT onboarding"); return 2; }
+            if (string.IsNullOrWhiteSpace(portal)) portal = null;   // the bundle passes --portal "" when IT set none
+            if (!Machine.IsElevated()) { DebugTrace.Write("not elevated - exiting 2"); MessageBox.Show("Run as administrator.", "PAT onboarding"); return 2; }
             Application.EnableVisualStyles();
+            DebugTrace.Write("showing the window");
             Application.Run(new MainForm(portal));
+            DebugTrace.Write("window closed - exiting 0");
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// DEBUG - remove once the bundle's launch path is proven (2026-09-25: after setup the helper "did
+    /// not run automatically"). Written BEFORE any window exists, so a helper that never shows still
+    /// leaves a record of whether it started at all, how, and why it stopped. Never a secret: no
+    /// payload, no device code - only the process's own facts.
+    /// </summary>
+    internal static class DebugTrace
+    {
+        private static readonly string File =
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), @"PAT\Onboarding\logs\helper-debug.log");
+
+        public static void Write(string m)
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(File));
+                System.IO.File.AppendAllText(File, $"{DateTime.UtcNow:u} [pid {System.Diagnostics.Process.GetCurrentProcess().Id}] {m}{Environment.NewLine}");
+            }
+            catch { }
+        }
+
+        public static void Start(string[] args)
+        {
+            string parent = "?";
+            try
+            {
+                var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+                using (var q = new System.Management.ManagementObjectSearcher($"SELECT ParentProcessId FROM Win32_Process WHERE ProcessId={pid}"))
+                    foreach (System.Management.ManagementObject o in q.Get())
+                    {
+                        var ppid = Convert.ToInt32(o["ParentProcessId"]);
+                        try { parent = $"{System.Diagnostics.Process.GetProcessById(ppid).ProcessName} (pid {ppid})"; } catch { parent = $"pid {ppid} (exited)"; }
+                    }
+            }
+            catch (Exception e) { parent = "unknown: " + e.Message; }
+            Write($"START v{typeof(Program).Assembly.GetName().Version} args=[{string.Join(" ", args)}] elevated={Machine.IsElevated()} " +
+                  $"user={Environment.UserDomainName}\\{Environment.UserName} parent={parent} exe={System.Reflection.Assembly.GetExecutingAssembly().Location} " +
+                  $"os={Environment.OSVersion.VersionString} clr={Environment.Version}");
+        }
+
+        public static void Crash(Exception e)
+        {
+            Write("CRASH " + e);
+            try { MessageBox.Show("The onboarding helper hit an unexpected error:\n\n" + e?.Message + "\n\nDetails: " + File, "PAT onboarding"); } catch { }
         }
     }
 }

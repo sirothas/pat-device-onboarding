@@ -19,6 +19,14 @@ its address or its TLS certificate. It trusts a portal only if it serves
 exact portal, its concentrator and its machine CA. A payload whose CA or concentrator differs from
 the signed document is refused before anything touches the operating system.
 
+## Test runs: logs
+
+- Setup (the WiX bundle): `PAT-Onboarding-Setup.exe /log C:\PAT\setup.log` (without `/log`, WiX writes
+  `%TEMP%\PAT_Company_Laptop_Onboarding_*.log`).
+- Helper: `C:\ProgramData\PAT\Onboarding\logs\` - `onboarding-*.log` per run, and, while the launch
+  path is being proven, `helper-debug.log`: every start (arguments, elevation, user, **parent process**)
+  and any crash. No secrets in either.
+
 ## Verify a release
 
 ```
