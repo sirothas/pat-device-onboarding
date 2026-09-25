@@ -4,7 +4,9 @@
        uninstalling onboarding must never remove the tunnel a joined laptop depends on;
     2. PAT-Onboarding.msi (the helper);
   then launches the helper ELEVATED through the engine (LaunchTargetElevatedId), so the employee sees
-  ONE UAC prompt for the whole thing.
+  ONE UAC prompt for the whole thing. LaunchTarget must ALSO be set: without it the standard UI shows
+  no Launch button at all (first device run, 2026-09-25 - setup ended on Close, nothing opened);
+  LaunchTargetElevatedId then decides that the launch is elevated.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
@@ -15,6 +17,7 @@
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication Theme="hyperlinkSidebarLicense"
                                               LicenseUrl="https://github.com/sirothas/pat-device-onboarding/blob/main/LICENSE"
+                                              LaunchTarget="[ProgramFiles64Folder]PAT\Onboarding\PatOnboarding.exe"
                                               LaunchTargetElevatedId="Helper"
                                               LaunchArguments="--portal &quot;[PORTAL_URL]&quot;" />
     </BootstrapperApplication>
