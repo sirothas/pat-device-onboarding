@@ -75,19 +75,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wix extension add failed ($LASTEXITCODE)" }
           $list = wix extension list | Out-String
           Write-Host $list
-          if ($list -notmatch 'WixToolset\.Bal\.wixext') { throw "WixToolset.Bal.wixext is not installed after extension add" }
+          # Found where it ACTUALLY is, not where it is expected to be: builds #2 and #4 both passed
+          # this step and then failed WIX0144 at a path that did not hold the DLL.
+          $dll = Get-ChildItem -Recurse -File -Filter WixToolset.Bal.wixext.dll -Path (Join-Path $PWD '.wix'), (Join-Path $HOME '.wix') -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { throw "WixToolset.Bal.wixext.dll is nowhere under .wix after extension add" }
+          Write-Host "Bal extension: $($dll.FullName)"
+          "BAL_EXT=$($dll.FullName)" >> $env:GITHUB_ENV
 
       # WiX runs through tools/wix.ps1, which turns every WiX error/warning line into a GitHub
-      # annotation: those are readable through the PUBLIC API, the raw log is not (anonymous = 403).
+      # annotation (readable through the PUBLIC API; the raw log is not) and FAILS on WIX8601: WiX
+      # resolves a relative -d path against the .wxs file's folder, harvested nothing, and still
+      # reported success - build #4's MSI held no helper at all. Paths are absolute ($PWD) for that.
       - name: Build the MSI
         shell: pwsh
-        run: ./tools/wix.ps1 build installer/Package.wxs -arch x64 -d Version=${{ steps.v.outputs.version }} -d PublishDir=out/helper -o out/PAT-Onboarding.msi
+        run: ./tools/wix.ps1 build installer/Package.wxs -arch x64 -d Version=${{ steps.v.outputs.version }} -d "PublishDir=$PWD/out/helper" -o out/PAT-Onboarding.msi
 
       # PHASE 3: sign out/PAT-Onboarding.msi here.
 
       - name: Build the bundle
         shell: pwsh
-        run: ./tools/wix.ps1 build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext -d Version=${{ steps.v.outputs.version }} -d OpenVpnMsi=out/openvpn.msi -d OnboardingMsi=out/PAT-Onboarding.msi -o out/PAT-Onboarding-Setup.exe
+        run: ./tools/wix.ps1 build installer/Bundle.wxs -arch x64 -ext $env:BAL_EXT -d Version=${{ steps.v.outputs.version }} -d "OpenVpnMsi=$PWD/out/openvpn.msi" -d "OnboardingMsi=$PWD/out/PAT-Onboarding.msi" -o out/PAT-Onboarding-Setup.exe
 
       # PHASE 3: wix burn detach out/PAT-Onboarding-Setup.exe -engine out/engine.exe
       #          sign out/engine.exe
