@@ -78,6 +78,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wix extension add failed ($LASTEXITCODE)" }
           $list = wix extension list | Out-String
           Write-Host $list
+          if ($list -match 'damaged') { throw "a WiX extension reports itself damaged - extension add's exit code is not to be trusted: $list" }
           # Found where it ACTUALLY is, not where it is expected to be: builds #2 and #4 both passed
           # this step and then failed WIX0144 at a path that did not hold the DLL.
           $dll = Get-ChildItem -Recurse -File -Filter WixToolset.BootstrapperApplications.wixext.dll -Path (Join-Path $PWD '.wix'), (Join-Path $HOME '.wix') -ErrorAction SilentlyContinue | Select-Object -First 1
