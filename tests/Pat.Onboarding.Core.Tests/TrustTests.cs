@@ -110,6 +110,20 @@ public class TenantDocumentTests
         Assert.Equal(Fixture.Hex(f.CaDer), t.MachineCaSha256);
     }
 
+    // The Linux pins (pat-platform ADR 0058) are EXTRA fields in the same v1 document. Every Windows
+    // installer already deployed must keep accepting a document that carries them - re-signing a
+    // tenant for Linux laptops must not break its Windows ones.
+    [Fact] public void DocumentWithLinuxPinsIsStillAcceptedOnWindows()
+    {
+        var t = TenantDocument.Verify(f.Envelope(new
+        {
+            v = 1, tenant = "example-demo", portal = "https://iip.example.test", concentrator = "odj.example.test",
+            machine_ca_sha256 = Fixture.Hex(f.CaDer), not_after = "2027-09-25T00:00:00Z",
+            ad_domain = "demo.example.test", ad_ca_sha256 = new string('a', 64)
+        }), f.Trusted, Fixture.Portal, Fixture.Now);
+        Assert.Equal("odj.example.test", t.Concentrator);
+    }
+
     [Fact] public void TamperedDocumentIsRefused() =>
         Assert.Throws<TrustException>(() => TenantDocument.Verify(f.Envelope(tamper: d => { d[10] ^= 1; return d; }), f.Trusted, Fixture.Portal, Fixture.Now));
 
