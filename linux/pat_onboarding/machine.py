@@ -225,6 +225,10 @@ def join_vars(payload, admins):
         "pat_identity_allow_groups": [],
         "pat_identity_allow_users": allow,
         "pat_identity_mkhomedir": True,
+        # A laptop's address is its tunnel address - pooled, reassigned on every connection. Registering
+        # it in AD DNS (the AD provider's default) points the laptop's name at another laptop tomorrow,
+        # and the update fails anyway through the DC-only tunnel firewall (#207: "Dynamic DNS update failed").
+        "pat_identity_ad_dyndns_update": False,
     }
 
 

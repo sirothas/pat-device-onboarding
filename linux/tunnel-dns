@@ -53,6 +53,15 @@ case "${script_type:-}" in
         resolvectl domain "$dev" $domains
         resolvectl default-route "$dev" false
         echo "tunnel-dns: $dev -> dns [$servers] routing domains [$domains], not the default DNS route"
+        # The DCs are reachable NOW: tell SSSD, rather than let it find out on its own backoff schedule.
+        # At boot SSSD usually starts before the tunnel, finds no DC, goes offline, and retries after about
+        # 1, 2 and 4 minutes - the first boot after onboarding measured 8 minutes offline, 2 s after which the
+        # tunnel was up (pat-platform #207). SIGUSR2 is SSSD's "go online" signal (sssd(8)), what
+        # NetworkManager's dispatcher sends. `systemctl kill` goes through PID 1, so it works from inside
+        # OpenVPN's sandboxed unit (no CAP_KILL needed); before the join there is no sssd - harmless.
+        if systemctl -q is-active sssd.service 2>/dev/null; then
+            systemctl kill --signal=SIGUSR2 --kill-whom=main sssd.service && echo "tunnel-dns: told sssd to go online"
+        fi
         ;;
     down|pre-down)
         resolvectl revert "$dev" 2>/dev/null || true

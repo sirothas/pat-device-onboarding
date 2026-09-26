@@ -111,6 +111,7 @@ class JoinVarsTests(unittest.TestCase):
         self.assertEqual(v["pat_identity_login_access_users"], ["labadmin", "satishs"])
         self.assertEqual(v["pat_identity_allow_users"], ["labadmin", "satishs"])   # local admin kept in
         self.assertTrue(v["pat_identity_mkhomedir"])
+        self.assertIs(v["pat_identity_ad_dyndns_update"], False)             # pooled tunnel address
         json.dumps(v)   # serialisable into the vars file
 
 
