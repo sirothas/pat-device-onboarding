@@ -3,6 +3,7 @@
 
     tools/sign-tenant-document.py --tenant example-demo --portal https://iip.example.test \
         --concentrator odj.example.test --machine-ca machine-ca.pem --days 365 \
+        --ad-domain ad.example.test --ad-ca ad-root-ca.pem \
         --kid pat-tenant-dev-2026-09 --key-file ~/pat-keys/pat-tenant-dev-2026-09.key.pem   > envelope.json
     # production: --kms-key-id <AWS KMS key> instead of --key-file (the private key never leaves KMS)
 
@@ -48,6 +49,10 @@ def main():
     a.add_argument("--portal", required=True)
     a.add_argument("--concentrator", required=True)
     a.add_argument("--machine-ca", required=True, help="PEM of the machine CA the tunnel must trust")
+    # Ubuntu laptops join ONLINE and trust the DCs' LDAPS certificate themselves, so the Linux helper
+    # requires the document to pin the domain and its CA (pat-platform ADR 0058). Windows ignores both.
+    a.add_argument("--ad-domain", help="the AD domain Linux laptops join (required with --ad-ca)")
+    a.add_argument("--ad-ca", help="PEM of the CA that issued the DCs' LDAPS certificates (first certificate is pinned)")
     a.add_argument("--days", type=int, default=365)
     a.add_argument("--kid", required=True)
     g = a.add_mutually_exclusive_group(required=True)
@@ -57,11 +62,18 @@ def main():
 
     if not x.portal.startswith("https://") or x.portal.rstrip("/") != x.portal.rstrip("/").split("?")[0]:
         raise SystemExit("--portal must be an https:// origin")
+    if bool(x.ad_domain) != bool(x.ad_ca):
+        raise SystemExit("--ad-domain and --ad-ca go together (both, for a tenant with Linux laptops, or neither)")
+    if x.ad_domain and not re.fullmatch(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+", x.ad_domain):
+        raise SystemExit("--ad-domain is not a domain name")
     not_after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=x.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    doc = json.dumps({
+    fields = {
         "v": 1, "tenant": x.tenant, "portal": x.portal.rstrip("/"), "concentrator": x.concentrator,
         "machine_ca_sha256": hashlib.sha256(cert_der(x.machine_ca)).hexdigest(), "not_after": not_after,
-    }, separators=(",", ":")).encode()
+    }
+    if x.ad_domain:
+        fields.update(ad_domain=x.ad_domain.lower(), ad_ca_sha256=hashlib.sha256(cert_der(x.ad_ca)).hexdigest())
+    doc = json.dumps(fields, separators=(",", ":")).encode()
 
     if x.key_file:
         with tempfile.NamedTemporaryFile(delete=False) as t:
