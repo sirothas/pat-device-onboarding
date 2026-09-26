@@ -1,0 +1,64 @@
+#!/bin/sh
+# tunnel-dns - OpenVPN up/down hook for the PAT machine tunnel (installed as /usr/lib/pat-onboarding/tunnel-dns).
+#
+# SPLIT DNS: the AD domain resolves over the tunnel link, everything else stays on the home resolver.
+# The concentrator pushes `dhcp-option DNS <dc>` per DC and `dhcp-option DOMAIN <ad domain>`; this makes
+# them a ROUTING-ONLY domain (~domain) on the tun link and takes the link out of the default route for
+# DNS, so the employee's other lookups never go through the company.
+#
+# Reads both forms OpenVPN may hand over: foreign_option_N (2.6, and 2.7's compatibility env) and
+# dns_server_N_address_M / dns_search_domain_N (2.7's --dns). The profile disables 2.7's own dns-updown,
+# so this is the one mechanism on both releases.
+set -eu
+dev="${dev:?dev not set - run by OpenVPN only}"
+
+case "${script_type:-}" in
+    up)
+        servers=""; domains=""
+        i=1
+        while :; do
+            eval "opt=\${foreign_option_$i:-}"
+            [ -n "$opt" ] || break
+            case "$opt" in
+                "dhcp-option DNS "*)    servers="$servers ${opt#dhcp-option DNS }" ;;
+                "dhcp-option DOMAIN "*) domains="$domains ~${opt#dhcp-option DOMAIN }" ;;
+            esac
+            i=$((i + 1))
+        done
+        for n in 0 1 2 3 4 5 6 7; do
+            for m in 1 2 3 4; do
+                eval "a=\${dns_server_${n}_address_${m}:-}"
+                [ -z "$a" ] || servers="$servers $a"
+            done
+        done
+        for n in 1 2 3 4 5 6 7 8; do
+            eval "d=\${dns_search_domain_${n}:-}"
+            [ -z "$d" ] || domains="$domains ~$d"
+        done
+        # De-duplicate, keep order, and drop blank lines: `printf '%s\n'` with NO arguments still prints one
+        # empty line, and without NF that became a single space - a "non-empty" list that let an empty
+        # push through the check below (caught by the negative test, 2026-09-26).
+        # shellcheck disable=SC2086  # word-splitting the lists is the point
+        servers=$(printf '%s\n' $servers | awk 'NF && !s[$0]++' | tr '\n' ' ')
+        # shellcheck disable=SC2086
+        domains=$(printf '%s\n' $domains | awk 'NF && !s[$0]++' | tr '\n' ' ')
+        servers=${servers% }; domains=${domains% }
+        if [ -z "$servers" ] || [ -z "$domains" ]; then
+            echo "tunnel-dns: the concentrator pushed no DNS server or no domain - the AD domain will not resolve" >&2
+            exit 1
+        fi
+        # shellcheck disable=SC2086  # word-splitting the lists is the point
+        resolvectl dns "$dev" $servers
+        # shellcheck disable=SC2086
+        resolvectl domain "$dev" $domains
+        resolvectl default-route "$dev" false
+        echo "tunnel-dns: $dev -> dns [$servers] routing domains [$domains], not the default DNS route"
+        ;;
+    down|pre-down)
+        resolvectl revert "$dev" 2>/dev/null || true
+        ;;
+    *)
+        echo "tunnel-dns: unexpected script_type '${script_type:-}'" >&2
+        exit 1
+        ;;
+esac
