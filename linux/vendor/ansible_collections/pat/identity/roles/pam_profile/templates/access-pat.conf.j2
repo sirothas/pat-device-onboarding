@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# pat.identity.pam_profile -- pam_access allow-list (simple_allow_groups mode).
+# Read via `accessfile=` from the PAM account stack, NOT the package-owned
+# /etc/security/access.conf. Format:  permission : users/groups : origins
+# First match wins, so the deny-all must be last.
+#
+# Local root keeps access so a misconfiguration cannot lock the console out.
++ : root : LOCAL
+{% for grp in pat_identity_allow_groups %}
++ : ({{ grp }}) : ALL
+{% endfor %}
+{% for usr in pat_identity_allow_users %}
++ : {{ usr }} : ALL
+{% endfor %}
+# Everyone not matched above is denied, from anywhere.
+- : ALL : ALL

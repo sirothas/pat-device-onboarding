@@ -1,0 +1,14 @@
+---
+# Debian 12/13 and Ubuntu 22.04/24.04. On the Debian family the NSS module
+# ships separately (libnss-sss), unlike RHEL where sssd pulls it in -- the
+# canonical per-family trap this vars file exists to absorb.
+pat_identity_sssd_packages:
+  - sssd
+  - sssd-ldap
+  - sssd-tools           # provides sssctl (config-check)
+  - libnss-sss
+  - libpam-sss
+  - ldap-utils
+  - oddjob
+  - oddjob-mkhomedir
+pat_identity_sssd_service: sssd

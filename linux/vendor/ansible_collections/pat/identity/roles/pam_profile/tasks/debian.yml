@@ -1,0 +1,87 @@
+---
+# ===========================================================================
+# Debian family -- pam-auth-update.
+#
+# Policy is expressed as pam-config fragments in /usr/share/pam-configs/;
+# `pam-auth-update --package` composes them into the /etc/pam.d/common-*
+# stacks non-interactively. We never edit the common-* files directly -- that
+# is pam-auth-update's job, and a hand edit is lost on its next run.
+#
+# Each fragment is deployed only in its mode and removed otherwise; both the
+# deploy and the removal notify the handler, so switching modes re-runs
+# pam-auth-update and the old fragment is disabled.
+# ===========================================================================
+
+- name: Install pam-auth-update and PAM modules
+  ansible.builtin.apt:
+    name: "{{ pat_identity_pam_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Deploy the pam_slurm_adopt fragment (slurm_adopt mode)
+  ansible.builtin.template:
+    src: pam-config-slurm-adopt.j2
+    dest: "{{ pat_identity_pam_configs_dir }}/pat-slurm-adopt"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_pam_access == 'slurm_adopt'
+  notify: pat_identity_pam_run_auth_update
+
+- name: Remove the pam_slurm_adopt fragment when not in slurm_adopt mode
+  ansible.builtin.file:
+    path: "{{ pat_identity_pam_configs_dir }}/pat-slurm-adopt"
+    state: absent
+  when: pat_identity_pam_access != 'slurm_adopt'
+  notify: pat_identity_pam_run_auth_update
+
+- name: Deploy the pam_access fragment (simple_allow_groups mode)
+  ansible.builtin.template:
+    src: pam-config-access.j2
+    dest: "{{ pat_identity_pam_configs_dir }}/pat-access"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_pam_access == 'simple_allow_groups'
+  notify: pat_identity_pam_run_auth_update
+
+- name: Remove the pam_access fragment when not group-gating
+  ansible.builtin.file:
+    path: "{{ pat_identity_pam_configs_dir }}/pat-access"
+    state: absent
+  when: pat_identity_pam_access != 'simple_allow_groups'
+  notify: pat_identity_pam_run_auth_update
+
+- name: Deploy the mkhomedir fragment (when enabled)
+  ansible.builtin.template:
+    src: pam-config-mkhomedir.j2
+    dest: "{{ pat_identity_pam_configs_dir }}/pat-mkhomedir"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_mkhomedir | bool
+  notify: pat_identity_pam_run_auth_update
+
+- name: Remove the mkhomedir fragment when disabled
+  ansible.builtin.file:
+    path: "{{ pat_identity_pam_configs_dir }}/pat-mkhomedir"
+    state: absent
+  when: not (pat_identity_mkhomedir | bool)
+  notify: pat_identity_pam_run_auth_update
+
+# --- pam_access allow-list (simple_allow_groups mode) ----------------------
+- name: Write the pam_access allow-list
+  ansible.builtin.template:
+    src: access-pat.conf.j2
+    dest: "{{ pat_identity_access_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_pam_access == 'simple_allow_groups'
+
+- name: Remove the pam_access allow-list when not group-gating
+  ansible.builtin.file:
+    path: "{{ pat_identity_access_file }}"
+    state: absent
+  when: pat_identity_pam_access != 'simple_allow_groups'

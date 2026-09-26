@@ -1,0 +1,25 @@
+---
+galaxy_info:
+  role_name: sssd_ldap_idonly
+  namespace: pat
+  author: Parvati Axis Technologies Pvt Ltd
+  description: >-
+    Identity-only SSSD for ephemeral compute nodes (ADR 0004): resolve numeric
+    UID/GID over LDAPS with a read-only bind, no authentication, no domain
+    join, generous offline cache.
+  license: Proprietary
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions: ["9"]
+    # 'all' is the schema-safe value: ansible-lint's galaxy platform enum lags
+    # real release codenames. Supported-release truth is in the description.
+    - name: Ubuntu
+      versions: ["all"]
+    - name: Debian
+      versions: ["all"]
+  galaxy_tags: [identity, sssd, ldap, hpc]
+# ca_trust must run first (see README + tasks/main.yml). Not declared as a
+# meta dependency so this role stays independently testable in Molecule, where
+# there is no directory and nothing to trust.
+dependencies: []

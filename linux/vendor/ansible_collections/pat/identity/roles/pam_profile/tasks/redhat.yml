@@ -1,0 +1,111 @@
+---
+# ===========================================================================
+# RedHat family -- authselect.
+#
+# authselect owns /etc/pam.d/* and /etc/nsswitch.conf. Editing those files
+# directly is futile: authselect silently reverts them on its next run, and
+# the symptom is pam_slurm_adopt "working today, gone next week" with nothing
+# in the commit log to blame. So we create a CUSTOM profile (a copy of the
+# stock sssd profile), edit the COPY's templates, and select it. All PAM
+# changes flow through authselect.
+#
+# KNOWN LIMITATION -- this role cannot be validated by `--check`. The
+# create-profile task (creates: guard) is a no-op in check mode, so the profile
+# templates it would write do not exist, and the blockinfile task below fails
+# with "Path .../system-auth does not exist". This is NOT a defect: live, create
+# runs first and inject succeeds; a live re-converge is idempotent (creates:
+# skips, blockinfile is marker-based). It is a PROPERTY of check mode -- a role
+# whose later tasks edit files an earlier task creates is unverifiable by a dry
+# run, because check mode never creates them. Validate this role by a live
+# converge, not `--check`.
+# ===========================================================================
+
+- name: Install authselect and the mkhomedir helper
+  ansible.builtin.package:
+    name: "{{ pat_identity_pam_packages }}"
+    state: present
+
+- name: Create the custom authselect profile from the stock sssd profile
+  ansible.builtin.command:
+    cmd: "authselect create-profile {{ pat_identity_authselect_profile }} --base-on sssd"
+  args:
+    creates: "/etc/authselect/custom/{{ pat_identity_authselect_profile }}/system-auth"
+
+# The mode-specific PAM line. It is appended to BOTH system-auth and
+# password-auth (console/login uses system-auth; sshd uses password-auth), so
+# the policy holds whichever path a session comes in on. PAM groups lines by
+# type, so an account/session line at end-of-file is still evaluated in its
+# own phase.
+- name: Compose the mode-specific PAM line
+  ansible.builtin.set_fact:
+    _pat_pam_line: >-
+      {{
+        ('-session optional pam_slurm_adopt.so action_no_jobs='
+         ~ pat_identity_slurm_adopt_action_no_jobs)
+        if pat_identity_pam_access == 'slurm_adopt'
+        else ('account required pam_access.so accessfile='
+              ~ pat_identity_access_file ~ ' listsep=,')
+      }}
+
+- name: Inject the mode-specific PAM line into the custom profile templates
+  ansible.builtin.blockinfile:
+    path: "/etc/authselect/custom/{{ pat_identity_authselect_profile }}/{{ item }}"
+    marker: "# {mark} ANSIBLE MANAGED pat.identity.pam_profile"
+    insertafter: EOF
+    block: |
+      # slurm_adopt: session adopted into the running job's cgroup so it is
+      # accounted and dies with the job. REQUIRES slurm.conf PrologFlags=Contain
+      # (pat.hpc.slurm_common) -- without it pam_slurm_adopt is a SILENT no-op.
+      # simple_allow_groups: pam_access denies anyone outside the allow-list.
+      {{ _pat_pam_line }}
+  loop:
+    - system-auth
+    - password-auth
+  notify: pat_identity_pam_apply_changes
+
+- name: Compute the desired authselect feature set
+  ansible.builtin.set_fact:
+    _pat_authselect_features: >-
+      {{ ['with-sudo']
+         + (['with-mkhomedir'] if (pat_identity_mkhomedir | bool) else []) }}
+
+- name: Read the currently-selected authselect profile and features
+  ansible.builtin.command:
+    cmd: authselect current --raw
+  register: _pat_current
+  changed_when: false
+  failed_when: false        # rc != 0 simply means nothing is selected yet
+
+- name: Select the custom profile with the desired features
+  ansible.builtin.command:
+    cmd: >-
+      authselect select custom/{{ pat_identity_authselect_profile }}
+      {{ _pat_authselect_features | join(' ') }} --force
+  changed_when: true
+  # Only (re)select when the current selection or feature set differs, so the
+  # role is idempotent. `authselect current --raw` prints the profile and its
+  # features on ONE whitespace-separated line (verified 2026-08-25 on EL9:
+  # "custom/pat-hpc with-sudo with-mkhomedir") -- so split on whitespace, NOT
+  # on '\n'. The earlier `.split('\n')` yielded a single combined token, the
+  # feature `difference` never matched, and the task reselected (harmless, but
+  # reported `changed`) on EVERY converge -- open-findings #77.
+  when: >-
+    ('custom/' ~ pat_identity_authselect_profile) not in _pat_current.stdout
+    or (_pat_authselect_features | difference(_pat_current.stdout.split()) | length) > 0
+  notify: pat_identity_pam_apply_changes
+
+# --- pam_access allow-list (simple_allow_groups mode) ----------------------
+- name: Write the pam_access allow-list
+  ansible.builtin.template:
+    src: access-pat.conf.j2
+    dest: "{{ pat_identity_access_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_pam_access == 'simple_allow_groups'
+
+- name: Remove the pam_access allow-list when not group-gating
+  ansible.builtin.file:
+    path: "{{ pat_identity_access_file }}"
+    state: absent
+  when: pat_identity_pam_access != 'simple_allow_groups'

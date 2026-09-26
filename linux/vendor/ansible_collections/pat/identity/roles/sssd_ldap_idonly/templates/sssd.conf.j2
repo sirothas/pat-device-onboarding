@@ -1,0 +1,82 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# {{ ansible_managed }}
+# pat.identity.sssd_ldap_idonly -- ADR 0004 identity-only compute node.
+#
+# This node RESOLVES identity over LDAPS. It does NOT authenticate anyone
+# (auth_provider = none). There is no computer object, no Kerberos keytab and
+# no realm join. A user's numeric UID/GID resolve here so a job runs as the
+# right owner on shared storage; nobody logs in via this domain.
+[sssd]
+# No config_file_version: 2 is the default on every SSSD 2.x, and SSSD 2.12 (Ubuntu 26.04) REJECTS the
+# option ("Attribute 'config_file_version' is not allowed in section 'sssd'") - sssctl config-check then
+# fails the play. Checked with sssctl in ubuntu:24.04 (2.9.4) and ubuntu:26.04 (2.12.0) containers: the
+# file is clean on both without it (pat-platform RCA-62).
+services = nss, pam
+domains = {{ pat_identity_sssd_domain_name }}
+
+[nss]
+default_shell = {{ pat_identity_shell_fallback }}
+# Never answer a bare `getent passwd`/`getent group` from a full-directory dump.
+enum_cache_timeout = 0
+
+[pam]
+# pam_sss is present only so account status can be reported. This domain sets
+# auth_provider = none, so password authentication through it always fails --
+# which is the intended behaviour on a compute node (see the README).
+
+[domain/{{ pat_identity_sssd_domain_name }}]
+# --- identity only, never authentication -----------------------------------
+id_provider = ldap
+auth_provider = none
+chpass_provider = none
+# Login authorisation is enforced by PAM (pat.identity.pam_profile:
+# pam_slurm_adopt), not by SSSD, so the domain itself permits and lets PAM
+# decide.
+access_provider = permit
+
+# --- LDAPS to the directory -------------------------------------------------
+ldap_uri = {{ pat_identity_ldap_uri }}
+ldap_schema = {{ pat_identity_ldap_schema }}
+# id_mapping = false -> use the real uidNumber/gidNumber from the directory
+# (RFC2307). These numeric IDs are the access-control contract on shared
+# storage; they must never be algorithmically derived.
+ldap_id_mapping = {{ pat_identity_ldap_id_mapping | string | lower }}
+
+# --- TLS: fail closed on an untrusted chain ---------------------------------
+# ldaps:// (not STARTTLS). The DC CA must already be trusted by the system
+# (pat.identity.ca_trust runs first); if it is not, SSSD refuses the
+# connection and the node has no identity, which is safer than trusting an
+# unverified directory.
+ldap_id_use_start_tls = {{ pat_identity_ldap_id_use_start_tls | string | lower }}
+ldap_tls_reqcert = {{ pat_identity_ldap_tls_reqcert }}
+{% if pat_identity_ldap_ca_cert | length > 0 %}
+ldap_tls_cacert = {{ pat_identity_ldap_ca_cert }}
+{% endif %}
+
+# --- bind: read-only service account ----------------------------------------
+ldap_default_bind_dn = {{ _pat_ldap_bind_dn }}
+ldap_default_authtok = {{ _pat_ldap_bind_pw }}
+
+# --- search bases scoped to the user/group OUs, NOT the forest root ---------
+# A bind credential present on every ephemeral node must not be able to walk
+# the entire directory.
+ldap_user_search_base = {{ pat_identity_ldap_user_search_base }}
+ldap_group_search_base = {{ pat_identity_ldap_group_search_base }}
+
+# --- offline resilience (IDENTITY cache only) -------------------------------
+# A running job must keep resolving identity if the directory is briefly
+# unreachable. That resilience comes entirely from entry_cache_timeout: SSSD
+# serves cached identity entries when the provider is unreachable.
+entry_cache_timeout = {{ pat_identity_entry_cache_timeout }}
+
+# Authentication options are DELIBERATELY ABSENT. auth_provider = none means
+# nothing authenticates on this node (ADR 0004), so there are no credentials to
+# cache and nothing to expire -- cache_credentials and
+# offline_credentials_expiration are meaningless here and sssctl config-check
+# rejects offline_credentials_expiration outright. Offline *identity* resilience
+# (a long EDA job surviving a directory blip) is entry_cache_timeout above, NOT
+# credential caching. Do not add credential-cache options back: that is
+# configuration for a subsystem this node's design excludes.
+
+enumerate = {{ pat_identity_enumerate | string | lower }}
+fallback_homedir = {{ pat_identity_fallback_homedir }}

@@ -1,0 +1,11 @@
+---
+# RHEL / Rocky / AlmaLinux 9. Package and service names only -- everything
+# below the vars ladder in tasks/main.yml is OS-agnostic.
+pat_identity_sssd_packages:
+  - sssd
+  - sssd-ldap
+  - sssd-tools           # provides sssctl (config-check)
+  - openldap-clients
+  - oddjob
+  - oddjob-mkhomedir
+pat_identity_sssd_service: sssd

@@ -1,0 +1,15 @@
+---
+namespace: pat
+name: identity
+version: 0.3.0
+readme: README.md
+authors:
+  - Parvati Axis Technologies Pvt Ltd <info@parvatiat.com>
+description: >-
+  Directory identity for Linux hosts. Full AD join (id+auth) for interactive
+  and infrastructure hosts; LDAP identity-only (no computer object, no
+  authentication) for ephemeral hosts. Abstracts authselect (RHEL family)
+  and pam-auth-update (Debian family) behind one interface.
+license_file: LICENSE
+repository: https://github.com/sirothas/pat-ansible
+tags: [security, identity, sssd, activedirectory, ldap, pam]

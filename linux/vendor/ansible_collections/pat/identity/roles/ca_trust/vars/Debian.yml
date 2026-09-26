@@ -1,0 +1,10 @@
+---
+# Debian 12/13 and Ubuntu 22.04/24.04. Two per-family traps this file absorbs:
+# the anchor directory is different, and on the Debian family `update-ca-
+# certificates` ONLY picks up files ending in `.crt` (a `.pem` in the same
+# directory is silently ignored) -- the role writes `.crt` names for exactly
+# this reason.
+pat_identity_ca_trust_packages:
+  - ca-certificates          # provides update-ca-certificates
+pat_identity_ca_trust_dir: /usr/local/share/ca-certificates
+pat_identity_ca_trust_command: update-ca-certificates

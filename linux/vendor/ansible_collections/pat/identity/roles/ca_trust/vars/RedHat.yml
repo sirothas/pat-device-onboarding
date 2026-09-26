@@ -1,0 +1,13 @@
+---
+# RHEL / Rocky / AlmaLinux 9. The two per-family facts this role needs: where
+# admin-supplied trust anchors are dropped, and the command that folds them
+# into the consolidated bundle. Everything below the vars ladder in
+# tasks/main.yml is OS-agnostic.
+#
+# On the RedHat family anchors live under the ca-trust "source/anchors" tree
+# and `update-ca-trust` (implicit `extract`) regenerates the extracted bundles
+# that openssl, gnutls and NSS consumers actually read.
+pat_identity_ca_trust_packages:
+  - ca-certificates          # provides update-ca-trust
+pat_identity_ca_trust_dir: /etc/pki/ca-trust/source/anchors
+pat_identity_ca_trust_command: update-ca-trust

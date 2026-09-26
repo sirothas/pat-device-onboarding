@@ -1,0 +1,14 @@
+---
+# Role-prefixed handler names so two roles defining "restart sssd" cannot
+# collide silently (ADR 0004). restart, not reload: SSSD must re-read
+# sssd.conf and drop its cache view when the domain config changes; the config
+# was validated by sssctl config-check before this fires.
+- name: pat_sssd_ad_join_restart_sssd
+  ansible.builtin.service:
+    name: "{{ pat_identity_sssd_service }}"
+    state: restarted
+
+- name: pat_sssd_ad_join_restart_oddjobd
+  ansible.builtin.service:
+    name: "{{ pat_identity_oddjob_service }}"
+    state: restarted

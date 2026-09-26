@@ -1,0 +1,75 @@
+---
+# ---------------------------------------------------------------------------
+# pat.identity.sssd_ldap_idonly -- tunables
+#
+# Cross-client defaults only. The client-specific inputs (LDAP URI, bind
+# DN/password secret names, user/group search bases) have NO default here --
+# they come from inventories/<env>/group_vars for the compute host class and
+# the role asserts them. CI (check_no_client_strings) enforces that no client
+# value ever appears under collections/.
+#
+# Variables use the pat_identity_ prefix: it is the identity-domain namespace
+# shared by the inventory host-class files and the identity roles, so an
+# override set once in group_vars applies wherever it is relevant.
+# ---------------------------------------------------------------------------
+
+# --- Offline resilience -----------------------------------------------------
+# A long EDA or training run can outlive SSSD's default 90-minute entry cache.
+# If the directory is briefly unreachable at that moment, the node must keep
+# resolving from cache rather than start returning "no such user" mid-job.
+# When SSSD is offline it serves cached entries regardless of this timeout;
+# the timeout only governs how often it REFRESHES while online.
+#
+# ONLY the identity cache belongs here. cache_credentials /
+# offline_credentials_expiration were removed 2026-08-23: they govern OFFLINE
+# CREDENTIAL caching, which is meaningless when auth_provider = none (ADR 0004),
+# and sssctl config-check rejects offline_credentials_expiration in [domain].
+# The original intent was offline *identity* resilience -- that is this timeout,
+# not credential caching (the two were conflated). Do not re-add them.
+pat_identity_entry_cache_timeout: 43200        # 12h
+
+# --- Enumeration ------------------------------------------------------------
+# Never pull the whole directory on a bare `getent passwd`. It is slow on a
+# real forest and widens what a node-resident credential can extract.
+pat_identity_enumerate: false
+
+# --- TLS --------------------------------------------------------------------
+# ldaps:// (not STARTTLS), and fail closed on an untrusted chain. The DC CA
+# must already be in the system trust store (pat.identity.ca_trust runs
+# first). Point ldap_tls_cacert at a specific bundle only if you must; empty
+# means "use the system trust store", which is the intended path.
+pat_identity_ldap_id_use_start_tls: false
+pat_identity_ldap_tls_reqcert: demand
+pat_identity_ldap_ca_cert: ""
+
+# --- Schema -----------------------------------------------------------------
+# 'ad', NOT 'rfc2307'. The directory is Active Directory, where the login name
+# lives in sAMAccountName and there is NO 'uid' attribute. rfc2307 searches
+# uid=<name>, finds nothing, and every `id <user>` returns "no such user" even
+# though the bind succeeds and the user is in the search base -- observed live
+# on cn01 2026-08-23 (SSSD Online, users present with uidNumber, still not
+# resolving). ldap_schema=ad maps the name to sAMAccountName and reads the AD
+# object layout; combined with ldap_id_mapping=false below it uses the REAL
+# uidNumber/gidNumber (the access-control contract on shared storage), not
+# algorithmic SID mapping. This is still id_provider=ldap -- a plain LDAP bind,
+# no realm join, no computer object (ADR 0004 holds).
+#
+# id_mapping=false: SSSD reads the real uidNumber/gidNumber from the directory
+# instead of deriving them -- the two must never disagree or a user owns
+# different files on different hosts.
+pat_identity_ldap_schema: ad
+pat_identity_ldap_id_mapping: false
+
+# --- Fallbacks --------------------------------------------------------------
+pat_identity_shell_fallback: /bin/bash
+pat_identity_fallback_homedir: /home/%u
+
+# --- SSSD domain label ------------------------------------------------------
+# A local label for the [domain/...] stanza; not required to match the AD
+# domain name.
+pat_identity_sssd_domain_name: default
+
+# Manage /etc/resolv.conf to point this NON-JOINED node at the DCs (they resolve
+# the AD DNS zone; the VPC resolver does not). Set false on host classes where
+# DNS is handled another way (e.g. a realm-joined host, whose join sets it).
+pat_identity_manage_resolv_conf: true

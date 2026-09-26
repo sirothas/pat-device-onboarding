@@ -1,0 +1,136 @@
+---
+# ===========================================================================
+# pat.identity.ca_trust
+#
+# Put the client PKI's issuing chain into the OS trust store so TLS the host
+# INITIATES validates -- concretely, so SSSD can talk LDAPS to a DC with
+# ldap_tls_reqcert=demand. sssd_ldap_idonly / sssd_ad_join fail closed on an
+# untrusted chain, so this role runs FIRST; a node with no anchor comes up
+# with no identity rather than trusting an unverified directory.
+#
+# Structured as a variation on pat.base.bootstrap: platform assertion, then
+# the first_found vars ladder, then OS-agnostic task bodies. The only
+# per-family content is the anchor directory, the refresh command and the
+# package that provides it, all in vars/<Family>.yml.
+#
+# The role manages files named pat-ca-<name>.crt as a CLOSED SET: anchors in
+# the list are present, managed anchors no longer in the list are removed
+# (a rotated-out CA must stop being trusted). Anything not matching that
+# prefix -- OS-shipped roots, another tool's anchors -- is never touched.
+# ===========================================================================
+
+- name: Assert the platform is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['RedHat', 'Debian']
+    fail_msg: >-
+      pat.identity.ca_trust supports the RedHat and Debian families only.
+      Detected os_family={{ ansible_os_family }}
+      distribution={{ ansible_distribution }} {{ ansible_distribution_version }}.
+      Add a vars/<family>.yml and extend this assertion -- do not scatter
+      conditionals through the task bodies.
+    quiet: true
+  tags: [always]
+
+- name: Load OS-family variables
+  ansible.builtin.include_vars: "{{ lookup('ansible.builtin.first_found', _params) }}"
+  vars:
+    _params:
+      files:
+        - "{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_distribution }}.yml"
+        - "{{ ansible_os_family }}.yml"
+        - "default.yml"
+      paths:
+        - "vars"
+  tags: [always]
+
+# Fail fast, with a message that says where the fix lives. An empty list on a
+# host that includes this role means LDAPS will fail closed later for a reason
+# that is hard to trace back here -- refuse it now.
+- name: Assert at least one CA anchor was supplied
+  ansible.builtin.assert:
+    that:
+      - pat_identity_ca_anchors | length > 0
+    fail_msg: >-
+      pat.identity.ca_trust ran with no anchors. Set pat_identity_ca_anchors
+      (a list of {name, content}) in inventories/<env>/group_vars for this host
+      class. Without the DC issuing chain in the trust store, SSSD over LDAPS
+      (ldap_tls_reqcert=demand) fails closed and the node has no identity.
+    quiet: true
+  tags: [always]
+
+# Validate every anchor before writing anything: a safe filename slug and
+# something that at least looks like a PEM certificate. Catches a mistyped
+# lookup (empty string, a key path instead of the value) at the top rather
+# than writing a junk file and only discovering it when TLS fails.
+- name: Assert each anchor is well-formed
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is string
+      - item.name is match('^[A-Za-z0-9._-]+$')
+      - item.content is defined
+      - "'BEGIN CERTIFICATE' in item.content"
+    fail_msg: >-
+      Anchor '{{ item.name | default("<unnamed>") }}' is malformed: name must
+      match [A-Za-z0-9._-] and content must be a PEM certificate
+      (-----BEGIN CERTIFICATE-----).
+    quiet: true
+  loop: "{{ pat_identity_ca_anchors }}"
+  loop_control:
+    label: "{{ item.name | default('<unnamed>') }}"
+  tags: [always]
+
+- name: Ensure the CA-trust tooling is installed
+  ansible.builtin.package:
+    name: "{{ pat_identity_ca_trust_packages }}"
+    state: present
+  register: _pat_ca_pkg
+  until: _pat_ca_pkg is succeeded
+  retries: 3
+  delay: 10
+
+# Public CA certs, so no no_log: the diff of a trust anchor is useful, not
+# sensitive. 0644 root:root -- world-readable is correct for a trust anchor.
+- name: Install the declared CA trust anchors
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ pat_identity_ca_trust_dir }}/pat-ca-{{ item.name }}.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ pat_identity_ca_anchors }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: pat_ca_trust_update_ca_store
+
+- name: Enumerate anchors this role already manages
+  ansible.builtin.find:
+    paths: "{{ pat_identity_ca_trust_dir }}"
+    patterns: "pat-ca-*.crt"
+    file_type: file
+  register: _pat_ca_existing
+
+- name: Remove managed anchors no longer declared
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ _existing | difference(_desired) }}"
+  vars:
+    _existing: "{{ _pat_ca_existing.files | map(attribute='path') | list }}"
+    _desired: >-
+      {{ pat_identity_ca_anchors
+         | map(attribute='name')
+         | map('regex_replace', '^(.*)$',
+               pat_identity_ca_trust_dir ~ '/pat-ca-\1.crt')
+         | list }}
+  loop_control:
+    label: "{{ item | basename }}"
+  notify: pat_ca_trust_update_ca_store
+
+# Refresh the consolidated bundle NOW rather than at the end of the play, so a
+# role sequenced after this one in the same play (sssd_ldap_idonly) sees a
+# trust store that already includes these anchors.
+- name: Refresh the trust store now if anchors changed
+  ansible.builtin.meta: flush_handlers

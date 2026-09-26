@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# pat.identity.sssd_ldap_idonly -- AD DNS for a NON-JOINED identity-only node.
+# realm-join did not set this (this node never joins), so we pin the DCs.
+# Provided the DCs forward unknown queries to the VPC resolver, cloud service
+# endpoints still resolve. DC order follows pat_ad_domain_controllers (the
+# in-AZ DC first). NetworkManager is dns=none so it will not overwrite this file.
+search {{ pat_ad_domain }}
+{% for dc in pat_ad_domain_controllers %}
+nameserver {{ dc.ip }}
+{% endfor %}

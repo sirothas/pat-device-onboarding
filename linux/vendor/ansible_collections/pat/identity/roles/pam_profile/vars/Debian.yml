@@ -1,0 +1,7 @@
+---
+# Debian 12/13, Ubuntu 22.04/24.04. pam-auth-update (libpam-runtime) is the
+# mechanism; libpam-modules provides pam_access and pam_mkhomedir.
+pat_identity_pam_packages:
+  - libpam-runtime
+  - libpam-modules
+pat_identity_pam_configs_dir: /usr/share/pam-configs

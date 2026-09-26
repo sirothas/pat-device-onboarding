@@ -1,0 +1,43 @@
+---
+# ---------------------------------------------------------------------------
+# pat.identity.pam_profile -- tunables. Cross-client defaults only.
+# ---------------------------------------------------------------------------
+
+# Login model. The host class MUST choose; this default is the safer of the
+# two (group-gated) rather than the more permissive.
+#   simple_allow_groups | slurm_adopt
+pat_identity_pam_access: simple_allow_groups
+
+# Groups permitted to open an interactive session in simple_allow_groups mode.
+# Empty is rejected by the role -- an empty allow-list would lock everyone out.
+pat_identity_allow_groups: []
+
+# Individual USERS permitted in simple_allow_groups mode, alongside the groups. For a host that
+# belongs to a person (a company laptop, pat-platform ADR 0058: its assigned employee) - and, on a
+# laptop, its LOCAL admin account: the deny-all below matches local users too, and only root is
+# exempted, so a laptop gated on groups alone locks out the account created at OS install.
+pat_identity_allow_users: []
+
+# Create a home directory on first login (pam_mkhomedir / oddjob-mkhomedir).
+pat_identity_mkhomedir: false
+
+# What pam_slurm_adopt does when the connecting user has NO job on the node.
+# 'deny' is correct for a compute node: no job, no shell.
+pat_identity_slurm_adopt_action_no_jobs: deny
+
+# In slurm_adopt mode, pam_slurm_adopt is a SILENT no-op unless slurm.conf
+# carries PrologFlags=Contain. That flag is rendered by pat.hpc.slurm_common
+# from the shared inventory variable `pat_slurm_prolog_flags`, so this role
+# asserts on THAT variable (not the deployed file): order-independent (works
+# whether or not slurm_common has run yet) and it catches the real failure --
+# someone configuring the flag away -- rather than a play-sequencing artefact.
+# The variable is authoritative in the compute host-class group_vars; both this
+# role and slurm_common read the same value.
+
+# RedHat family: the name of the authselect custom profile this role creates
+# and selects. One profile, re-selected with different features per mode.
+pat_identity_authselect_profile: pat-hpc
+
+# Dedicated pam_access rule file (NOT the package-owned /etc/security/access.conf,
+# which we never edit). Referenced explicitly via accessfile= in the PAM line.
+pat_identity_access_file: /etc/security/access-pat.conf

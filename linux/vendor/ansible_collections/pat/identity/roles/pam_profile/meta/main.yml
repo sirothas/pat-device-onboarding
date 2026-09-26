@@ -1,0 +1,22 @@
+---
+galaxy_info:
+  role_name: pam_profile
+  namespace: pat
+  author: Parvati Axis Technologies Pvt Ltd
+  description: >-
+    PAM login policy: group-gated interactive login (pam_access) or job-scoped
+    compute access (pam_slurm_adopt). RedHat via an authselect custom profile,
+    Debian via pam-auth-update.
+  license: Proprietary
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions: ["9"]
+    # 'all' is the schema-safe value: ansible-lint's galaxy platform enum lags
+    # real release codenames. Supported-release truth is in the description.
+    - name: Ubuntu
+      versions: ["all"]
+    - name: Debian
+      versions: ["all"]
+  galaxy_tags: [identity, pam, authselect, slurm]
+dependencies: []

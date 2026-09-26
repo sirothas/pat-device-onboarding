@@ -1,0 +1,6 @@
+---
+# RHEL / Rocky / AlmaLinux 9. authselect is the mechanism; oddjob-mkhomedir
+# backs the with-mkhomedir feature.
+pat_identity_pam_packages:
+  - authselect
+  - oddjob-mkhomedir

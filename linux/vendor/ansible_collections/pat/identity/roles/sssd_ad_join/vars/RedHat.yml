@@ -1,0 +1,15 @@
+---
+# RHEL / Rocky / AlmaLinux 9. Package + service names only.
+pat_identity_ad_packages:
+  - sssd
+  - sssd-ad             # the AD provider
+  - sssd-tools          # sssctl (config-check)
+  - realmd              # realm join/discover
+  - adcli               # the actual computer-object create/join
+  - samba-common-tools  # net ads (realmd dependency for some ops)
+  - krb5-workstation    # kinit/klist, keytab tooling
+  - oddjob
+  - oddjob-mkhomedir
+  - openldap-clients
+pat_identity_sssd_service: sssd
+pat_identity_oddjob_service: oddjobd

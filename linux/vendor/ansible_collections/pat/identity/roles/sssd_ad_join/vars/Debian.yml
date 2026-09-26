@@ -1,0 +1,17 @@
+---
+# Debian / Ubuntu. Package + service names only.
+pat_identity_ad_packages:
+  - sssd
+  - sssd-ad
+  - sssd-tools
+  - realmd
+  - adcli
+  - samba-common-bin
+  - krb5-user
+  - libnss-sss
+  - libpam-sss
+  - oddjob
+  - oddjob-mkhomedir
+  - ldap-utils
+pat_identity_sssd_service: sssd
+pat_identity_oddjob_service: oddjobd

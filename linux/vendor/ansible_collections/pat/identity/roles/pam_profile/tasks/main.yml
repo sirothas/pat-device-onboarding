@@ -1,0 +1,94 @@
+---
+# ===========================================================================
+# pat.identity.pam_profile
+#
+# The PAM login policy for a host. This is the ONE role where dispatching on
+# ansible_os_family is legitimate (CONTRIBUTING): authselect (RedHat) and
+# pam-auth-update (Debian) are different MECHANISMS, not different names for
+# the same thing. Everything family-specific lives behind the include_tasks
+# dispatch below; the shared decisions (which mode, which groups) are made
+# here.
+#
+# Two modes, chosen by inventory via pat_identity_pam_access:
+#   simple_allow_groups  -- interactive/login hosts: only members of the
+#                           allow-groups may open a session (pam_access).
+#   slurm_adopt          -- compute nodes: a user may open a session only
+#                           while a job of theirs runs on the node, and the
+#                           session is adopted into the job cgroup so it is
+#                           accounted and dies with the job (pam_slurm_adopt).
+# ===========================================================================
+
+- name: Assert the platform is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['RedHat', 'Debian']
+    fail_msg: >-
+      pat.identity.pam_profile supports the RedHat and Debian families only.
+      Detected os_family={{ ansible_os_family }}
+      distribution={{ ansible_distribution }} {{ ansible_distribution_version }}.
+    quiet: true
+  tags: [always]
+
+- name: Load OS-family variables
+  ansible.builtin.include_vars: "{{ lookup('ansible.builtin.first_found', _params) }}"
+  vars:
+    _params:
+      files:
+        - "{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_distribution }}.yml"
+        - "{{ ansible_os_family }}.yml"
+        - "default.yml"
+      paths:
+        - "vars"
+  tags: [always]
+
+- name: Assert a valid login mode is selected
+  ansible.builtin.assert:
+    that:
+      - pat_identity_pam_access in ['simple_allow_groups', 'slurm_adopt']
+    fail_msg: >-
+      pat_identity_pam_access must be 'simple_allow_groups' (interactive hosts)
+      or 'slurm_adopt' (compute nodes). Got '{{ pat_identity_pam_access
+      | default('undefined') }}'. Set it in the host-class group_vars.
+    quiet: true
+  tags: [always]
+
+- name: Assert allow-groups are set for group-gated login
+  ansible.builtin.assert:
+    that:
+      - (pat_identity_allow_groups | default([]) | length > 0) or (pat_identity_allow_users | default([]) | length > 0)
+    fail_msg: >-
+      simple_allow_groups mode needs pat_identity_allow_groups (e.g.
+      [u_hpc_login_access]) or pat_identity_allow_users; an empty list would lock everyone out.
+    quiet: true
+  when: pat_identity_pam_access == 'simple_allow_groups'
+
+# slurm_adopt is a SILENT no-op unless slurm.conf carries PrologFlags=Contain.
+# That flag is rendered by pat.hpc.slurm_common from the shared inventory
+# variable pat_slurm_prolog_flags. Assert on the VARIABLE (not the deployed
+# file): order-independent -- works whether or not slurm_common has run yet --
+# and it catches the real failure (the flag configured away), which a
+# file-existence check would miss and a play-ordering check would false-positive.
+- name: Assert PrologFlags=Contain is configured (slurm_adopt mode)
+  ansible.builtin.assert:
+    that:
+      - "'Contain' in (pat_slurm_prolog_flags | default(''))"
+    fail_msg: >-
+      slurm_adopt mode requires pat_slurm_prolog_flags to contain 'Contain'
+      (rendered into slurm.conf by pat.hpc.slurm_common). Got
+      '{{ pat_slurm_prolog_flags | default("<unset>") }}'. Without it
+      pam_slurm_adopt loads but adopts nothing: sessions never enter the job
+      cgroup, so access control AND accounting silently fail open. Set it in the
+      compute host-class group_vars.
+    quiet: true
+  when: pat_identity_pam_access == 'slurm_adopt'
+  tags: [always]
+
+# --- the one legitimate os_family dispatch --------------------------------
+- name: Apply the RedHat-family PAM mechanism (authselect custom profile)
+  ansible.builtin.include_tasks: redhat.yml
+  when: ansible_os_family == 'RedHat'
+
+- name: Apply the Debian-family PAM mechanism (pam-auth-update)
+  ansible.builtin.include_tasks: debian.yml
+  when: ansible_os_family == 'Debian'

@@ -136,9 +136,67 @@ jobs:
             out/SHA256SUMS
             out/sbom.cdx.json
 
+  # The Ubuntu package: tests -> shellcheck -> .deb -> INSTALL it on each supported release, from that
+  # release's own archive, and run the suite against the installed code. A package that builds but does
+  # not install (a Depends missing from one release's archive) is caught here, not on a laptop.
+  linux:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: v
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.${{ github.run_number }}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Refuse a development trust key on a release tag
+        if: github.ref_type == 'tag'
+        run: |
+          if grep -q '^IS_DEVELOPMENT_KEY = True' linux/pat_onboarding/keys.py; then
+            echo "keys.py still trusts the DEVELOPMENT tenant key - a public release must carry the KMS production key" >&2; exit 1
+          fi
+      - name: Unit tests and shellcheck
+        run: |
+          sudo apt-get install -y -qq python3-cryptography shellcheck >/dev/null
+          (cd linux && python3 -m unittest discover -s tests)
+          shellcheck linux/tunnel-dns linux/build-deb.sh linux/dev-install.sh tools/vendor-pat-identity.sh
+      - name: Build the .deb
+        run: linux/build-deb.sh "${{ steps.v.outputs.version }}" out
+      - name: Install and test on Ubuntu 24.04 and 26.04
+        run: |
+          for img in ubuntu:24.04 ubuntu:26.04; do
+            docker run --rm -v "$PWD:/src:ro" "$img" bash -ec '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq >/dev/null && apt-get install -y -qq /src/out/*.deb >/dev/null
+              ! dpkg-query -W -f="\${Status}" krb5-config 2>/dev/null | grep -q installed
+              pat-onboarding --version
+              mkdir -p /w/linux /w/tests/Pat.Onboarding.Core.Tests
+              cp -r /src/linux/tests /w/linux/ && cp -r /src/tests/Pat.Onboarding.Core.Tests/Data /w/tests/Pat.Onboarding.Core.Tests/
+              ln -s /usr/lib/pat-onboarding/pat_onboarding /w/linux/pat_onboarding
+              cd /w/linux && python3 -m unittest discover -s tests
+              printf -- "- hosts: localhost\n  gather_facts: false\n  roles: [pat.identity.ca_trust, pat.identity.sssd_ad_join, pat.identity.pam_profile]\n" > /tmp/p.yml
+              ANSIBLE_COLLECTIONS_PATH=/usr/share/pat-onboarding/collections ansible-playbook --syntax-check /tmp/p.yml'
+          done
+      - name: Hashes
+        run: (cd out && sha256sum *.deb > SHA256SUMS.deb && cat SHA256SUMS.deb)
+      - name: Build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pat-onboarding-linux-${{ steps.v.outputs.version }}
+          path: |
+            out/*.deb
+            out/SHA256SUMS.deb
+
   release:
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, linux]
     runs-on: ubuntu-latest
     environment: release       # required reviewer: nothing is published without a human
     permissions:

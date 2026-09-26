@@ -1,0 +1,40 @@
+---
+# ---------------------------------------------------------------------------
+# pat.identity.ca_trust -- tunables
+#
+# Cross-client defaults only. The anchors themselves have NO default here --
+# they are client PKI material and come from inventories/<env>/group_vars.
+# CI (check_no_client_strings) enforces that no client value appears under
+# collections/.
+#
+# Variables use the pat_identity_ prefix: the identity-domain namespace shared
+# by the inventory host-class files and the identity roles.
+# ---------------------------------------------------------------------------
+
+# --- Trust anchors to install ----------------------------------------------
+# A list of anchors, each { name, content }:
+#
+#   pat_identity_ca_anchors:
+#     - name: azimuth-root-ca          # slug: [A-Za-z0-9._-], becomes pat-ca-<name>.crt
+#       content: "{{ lookup('pat.base.secret', 'ad/ca_root_pem') }}"
+#     - name: azimuth-issuing-ca
+#       content: "{{ lookup('file', 'files/issuing-ca.pem') }}"
+#
+# The role is deliberately SOURCE-AGNOSTIC: `content` is a PEM string and the
+# inventory decides where it comes from -- a Vault/Secrets-Manager value via
+# the pat.base.secret seam, a file lookup, or inline. This mirrors how
+# sssd_ldap_idonly takes its bind DN as a logical secret name rather than
+# welding a backend into the role. A CA certificate is public, so it need not
+# go through the secret backend, but it may.
+#
+# The role manages files matching `pat-ca-*.crt` in the anchor directory as a
+# closed set: an anchor removed from this list is removed from the host on the
+# next run (a rotated-out CA must actually stop being trusted). Files NOT
+# matching that prefix -- OS-shipped anchors, anything another tool placed --
+# are never touched.
+#
+# Empty is not a valid state for a host that includes this role: LDAPS with
+# ldap_tls_reqcert=demand (see sssd_ldap_idonly) fails closed without the DC's
+# issuing chain in the trust store, so the role asserts at least one anchor
+# rather than silently no-op a node into having no identity.
+pat_identity_ca_anchors: []

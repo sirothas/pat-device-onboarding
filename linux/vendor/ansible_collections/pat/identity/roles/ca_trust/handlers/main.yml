@@ -1,0 +1,11 @@
+---
+# Role-prefixed handler name (ADR 0004): two roles both defining "update ca
+# store" would collide silently and one would be lost.
+#
+# Runs once, at the end, only if an anchor was added, changed or removed --
+# regenerating the consolidated trust bundle is the expensive part and doing
+# it per-anchor would be wasteful and would report changed on every run.
+- name: pat_ca_trust_update_ca_store
+  ansible.builtin.command:
+    cmd: "{{ pat_identity_ca_trust_command }}"
+  changed_when: true

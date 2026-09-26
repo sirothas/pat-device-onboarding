@@ -1,0 +1,300 @@
+---
+# ===========================================================================
+# pat.identity.sssd_ad_join -- full AD domain join for interactive + infra
+# hosts (login, controller, DBD). The COUNTERPART to sssd_ldap_idonly:
+#   - id-only: id_provider=ldap, auth_provider=none, NO computer object.
+#   - this:    id_provider=ad,   auth_provider=ad,   computer object + keytab.
+# A login host caches credentials so an engineer can sign in during a DC
+# outage; a compute node has nothing to cache because nothing authenticates
+# there. Same directory, opposite requirements (README).
+#
+# Structure mirrors sssd_ldap_idonly: platform assert, ca_trust fail-loud,
+# vars ladder, input asserts, resolv.conf, packages, JOIN, then OUR sssd.conf,
+# config-check, restart. We realm-join for the computer object + keytab, then
+# deploy our OWN sssd.conf (deterministic id_provider=ad config) rather than
+# sed-editing realmd's output.
+#
+# SEQUENCE: runs AFTER pat.identity.ca_trust (wired in site.yml). The anchor
+# assert below is load-bearing, not documentation -- a comment is not a
+# dependency (the id-only role converged failed=0 with no anchor and resolved
+# nobody). adcli/LDAPS paths during the join want the DC CA trusted.
+# ===========================================================================
+
+- name: Assert the platform is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['RedHat', 'Debian']
+    fail_msg: >-
+      pat.identity.sssd_ad_join supports the RedHat and Debian families only.
+      Detected os_family={{ ansible_os_family }}
+      distribution={{ ansible_distribution }} {{ ansible_distribution_version }}.
+      Add a vars/<family>.yml and extend this assertion.
+    quiet: true
+  tags: [always]
+
+- name: Find CA trust anchors this platform's ca_trust would have installed
+  ansible.builtin.find:
+    paths: "{{ pat_identity_ca_trust_dir | default('/etc/pki/ca-trust/source/anchors') }}"
+    patterns: "pat-ca-*.crt"
+  register: _pat_ca_anchors
+  tags: [always]
+
+- name: Assert the DC CA trust anchor is present (pat.identity.ca_trust ran first)
+  ansible.builtin.assert:
+    that:
+      - _pat_ca_anchors.matched | int > 0
+    fail_msg: >-
+      No pat-ca-*.crt trust anchor found in
+      {{ pat_identity_ca_trust_dir | default('/etc/pki/ca-trust/source/anchors') }}.
+      pat.identity.ca_trust must run on this host BEFORE sssd_ad_join -- the
+      adcli/LDAPS paths used during the join need the DC's CA in the trust
+      store. Add ca_trust to the full-join play in site.yml, before this role.
+    quiet: true
+  tags: [always]
+
+- name: Load OS-family variables
+  ansible.builtin.include_vars: "{{ lookup('ansible.builtin.first_found', _params) }}"
+  vars:
+    _params:
+      files:
+        - "{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_distribution }}.yml"
+        - "{{ ansible_os_family }}.yml"
+        - "default.yml"
+      paths:
+        - "vars"
+  tags: [always]
+
+- name: Assert the required join inputs are present
+  ansible.builtin.assert:
+    that:
+      - pat_identity_ad_domain | length > 0
+      - pat_identity_ad_realm | length > 0
+      # a join-account join needs the OU and the account; an OTP join claims a pre-created object
+      - (pat_identity_ad_join_otp | length > 0) or (pat_identity_ad_computer_ou | length > 0)
+      - (pat_identity_ad_join_otp | length > 0) or (pat_identity_ad_join_account | length > 0)
+      - (pat_identity_ad_join_otp | length > 0) or (pat_identity_ad_join_password_secret | length > 0)
+      - (pat_identity_login_access_group | length > 0) or (pat_identity_login_access_users | length > 0)
+    fail_msg: >-
+      sssd_ad_join needs pat_identity_ad_domain, _ad_realm, _ad_computer_ou
+      (the DELEGATED Linux OU, not the default), _ad_join_account, its
+      _ad_join_password_secret, and _login_access_group (or _login_access_users) - or, for a
+      pre-created laptop object, pat_identity_ad_join_otp in place of the OU and join account.
+      Set them in inventories/<env>/group_vars for the joined host class.
+    quiet: true
+  tags: [always]
+
+# --- resolv.conf: a joining host must resolve the domain SRV records --------
+# Same rationale/mechanism as the id-only role. NetworkManager dns=none so the
+# DC pin survives reboots.
+- name: Assert the DC list is available to pin resolv.conf
+  ansible.builtin.assert:
+    that:
+      - pat_ad_domain_controllers is defined and pat_ad_domain_controllers | length > 0
+    fail_msg: >-
+      sssd_ad_join pins resolv.conf at the DCs and needs pat_ad_domain_controllers
+      (name/ip, in-AZ DC first). Set it, or pat_identity_manage_resolv_conf=false
+      if DNS is handled another way.
+    quiet: true
+  when: pat_identity_manage_resolv_conf | bool
+
+- name: Stop NetworkManager owning /etc/resolv.conf
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/90-pat-dns-none.conf
+    content: |
+      # pat.identity.sssd_ad_join: pin the DC nameservers; dns=none stops NM
+      # overwriting /etc/resolv.conf on the next network event or reboot.
+      [main]
+      dns=none
+    owner: root
+    group: root
+    mode: "0644"
+  register: _pat_nm_dns
+  when: pat_identity_manage_resolv_conf | bool
+
+- name: Reload NetworkManager so dns=none takes effect before resolv.conf is written
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+  when: pat_identity_manage_resolv_conf | bool and _pat_nm_dns is changed
+
+- name: Pin the resolver at the domain controllers
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_manage_resolv_conf | bool
+
+- name: Install SSSD, realmd, adcli and Kerberos client packages
+  ansible.builtin.package:
+    name: "{{ pat_identity_ad_packages }}"
+    state: present
+  register: _pat_pkg
+  until: _pat_pkg is succeeded
+  retries: 3
+  delay: 10
+
+# --- the join --------------------------------------------------------------
+# Is this host already joined? realm list names the domain when it is. This is
+# the idempotency guard AND the rebuild-orphan story: on a recreate the old
+# computer object is orphaned in AD; adcli (under realm join) RESETS/reuses an
+# existing computer account of the same name when the join account has rights,
+# so a same-hostname rebuild reclaims the orphan rather than erroring. Proven in
+# the reproducibility test, not assumed.
+- name: Check whether this host is already joined to the domain
+  ansible.builtin.command:
+    cmd: realm list
+  register: _pat_realm_list
+  changed_when: false
+  failed_when: false
+
+- name: Fetch the join account password (controller-side, no_log)
+  ansible.builtin.set_fact:
+    _pat_join_pw: "{{ lookup('pat.base.secret', pat_identity_ad_join_password_secret) }}"
+  no_log: true
+  when:
+    - pat_identity_ad_perform_join | bool
+    - pat_identity_ad_join_otp | length == 0
+    - pat_identity_ad_domain not in _pat_realm_list.stdout
+
+- name: Join the domain (computer object created in the delegated Linux OU)
+  # --automatic-id-mapping=no keeps AD's own uidNumber/gidNumber (RFC2307),
+  # matching the id-only compute nodes. Password on stdin, never argv (argv is
+  # world-readable in /proc); no_log so it never reaches a log or --diff.
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      printf '%s' "{{ _pat_join_pw }}" |
+      realm join --client-software=sssd --automatic-id-mapping=no
+      --computer-ou={{ pat_identity_ad_computer_ou | quote }}
+      -U {{ pat_identity_ad_join_account | quote }}
+      --unattended {{ pat_identity_ad_domain | quote }}
+    executable: /bin/bash
+  no_log: true
+  when:
+    - pat_identity_ad_perform_join | bool
+    - pat_identity_ad_join_otp | length == 0
+    - pat_identity_ad_domain not in _pat_realm_list.stdout
+  register: _pat_join
+  changed_when: _pat_join.rc == 0
+
+# ADR 0058: claim the object the broker PRE-CREATED, with the one-time password it set. No join
+# account, no --computer-ou (the object exists, in OU=Linux under the laptops OU); the computer
+# account name comes from this host's name, which the caller has already set to the IT-assigned one.
+# The OTP goes in ARGV - realm has no stdin form for it - so it is visible in /proc for the seconds
+# adcli takes to claim the object and rotate it. Accepted: single-use, scoped to one object, and
+# rotated within the same command. no_log keeps it out of every log and --diff.
+- name: Join the domain with the broker-set one-time password (pre-created object)
+  ansible.builtin.command:
+    argv:
+      - realm
+      - join
+      - --client-software=sssd
+      - --automatic-id-mapping=no
+      - "--one-time-password={{ pat_identity_ad_join_otp }}"
+      - --unattended
+      - "{{ pat_identity_ad_domain }}"
+  no_log: true
+  when:
+    - pat_identity_ad_perform_join | bool
+    - pat_identity_ad_join_otp | length > 0
+    - pat_identity_ad_domain not in _pat_realm_list.stdout
+  register: _pat_join_otp
+  changed_when: _pat_join_otp.rc == 0
+
+# --- how THIS release runs SSSD (read from the machine, not assumed) ---------
+# SSSD 2.10+ can run as an UNPRIVILEGED `sssd` user with socket-activated responders, and then
+# (upstream 2.10.0 release notes) "owner of /etc/sssd/sssd.conf ... should match the user configured
+# to start SSSD service". Ubuntu 26.04 (SSSD 2.12) does exactly that - User=sssd, sssd-nss/pam
+# sockets enabled (checked 2026-09-26); 24.04 (2.9.4) runs as root but ALSO enables the sockets. A root:root 0600 file is
+# unreadable to an sssd-user SSSD, and `services = nss, pam` fights the enabled sockets ("Failed to
+# listen on sssd-nss.socket"). Both were latent in this role until a 26.04 host was checked.
+# (systemd_service with no state is a read: it returns the unit's properties and changes nothing.)
+- name: Read the user sssd.service runs as
+  ansible.builtin.systemd_service:
+    name: "{{ pat_identity_sssd_service }}"
+  register: _pat_sssd_unit
+
+- name: Detect socket-activated SSSD responders
+  ansible.builtin.systemd_service:
+    name: sssd-nss.socket
+  register: _pat_sssd_nss_socket
+
+- name: Record how SSSD runs on this host
+  ansible.builtin.set_fact:
+    # an empty User= means systemd's default - root
+    _pat_sssd_owner: "{{ (_pat_sssd_unit.status.User | default('') | trim) or 'root' }}"
+    _pat_sssd_socket_activated: "{{ (_pat_sssd_nss_socket.status.UnitFileState | default('')) == 'enabled' }}"
+
+# The file's ownership follows the DISTRO where SSSD is unprivileged: Ubuntu 26.04's sssd.service runs
+# `chown -R root:sssd /etc/sssd` and `chmod -R g+r` before EVERY start (ExecStartPre, measured
+# 2026-09-26, pat-platform #207). Writing anything else means the role and the unit rewrite each other on
+# every converge. Root-mode SSSD (24.04, EL9) keeps root:root 0600.
+- name: Record how sssd.conf must be owned on this host
+  ansible.builtin.set_fact:
+    _pat_sssd_conf_group: "{{ 'root' if _pat_sssd_owner == 'root' else _pat_sssd_owner }}"
+    _pat_sssd_conf_mode: "{{ '0600' if _pat_sssd_owner == 'root' else '0640' }}"
+
+# With socket-activated responders, sssd-pac.socket FAILS on every boot: the AD provider makes the
+# monitor start the PAC responder itself, and Ubuntu's socket check counts that as "mentioned in the
+# services line" ("Misconfiguration found for the 'pac' responder", #207). PAC still runs (started by the
+# monitor), so the socket is only a failed unit - disable it, as the check's own message advises.
+- name: Read the PAC responder socket
+  ansible.builtin.systemd_service:
+    name: sssd-pac.socket
+  register: _pat_sssd_pac_socket
+  when: _pat_sssd_socket_activated | bool
+
+- name: Disable the PAC responder socket (the monitor starts PAC for the AD provider)
+  ansible.builtin.systemd_service:
+    name: sssd-pac.socket
+    enabled: false
+    state: stopped
+  when:
+    - _pat_sssd_socket_activated | bool
+    - (_pat_sssd_pac_socket.status.LoadState | default('')) == 'loaded'
+# (Its failed state from THIS boot stays listed until the next boot, when the disabled socket no longer
+# starts; onboarding always ends in a reboot. No reset-failed task - there is no module for it.)
+
+# --- our sssd.conf (deterministic; realmd's is replaced, not sed-edited) ----
+# NO secret in this file (AD provider uses the machine keytab), so no no_log.
+- name: Deploy sssd.conf (AD provider, our canonical config)
+  ansible.builtin.template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: "{{ _pat_sssd_conf_group }}"   # root on 24.04 / EL9, sssd on 26.04 - see above
+    mode: "{{ _pat_sssd_conf_mode }}"
+  notify: pat_sssd_ad_join_restart_sssd
+
+- name: Validate the SSSD configuration
+  ansible.builtin.command:
+    cmd: sssctl config-check
+  register: _pat_sssctl
+  changed_when: false
+  failed_when: _pat_sssctl.rc != 0
+
+# Home-dir auto-creation on first login (realmd's sssd profile does not enable
+# it by default). authselect on EL; pam-auth-update/pam_mkhomedir on Debian.
+- name: Enable home-dir creation on first login (authselect, EL)
+  ansible.builtin.command:
+    cmd: authselect enable-feature with-mkhomedir
+  register: _pat_authselect
+  changed_when: "'already enabled' not in (_pat_authselect.stderr + _pat_authselect.stdout)"
+  failed_when: _pat_authselect.rc != 0 and 'already enabled' not in (_pat_authselect.stderr + _pat_authselect.stdout)
+  when: ansible_os_family == 'RedHat'
+  notify: pat_sssd_ad_join_restart_oddjobd
+
+- name: Ensure oddjobd is enabled and running (serves mkhomedir)
+  ansible.builtin.service:
+    name: "{{ pat_identity_oddjob_service }}"
+    state: started
+    enabled: true
+
+- name: Ensure SSSD is enabled and running
+  ansible.builtin.service:
+    name: "{{ pat_identity_sssd_service }}"
+    state: started
+    enabled: true

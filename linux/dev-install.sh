@@ -5,8 +5,8 @@
 #
 # Does what the package will do, and nothing more: the dependencies from Ubuntu's OWN archive (every one
 # is there on 24.04 and 26.04 - pat-platform ADR 0058), the helper and its tunnel DNS hook at the paths
-# the helper expects, and the pat.identity collection it runs locally. Retire this script when the .deb
-# ships (its expiry condition): the package's Depends and file list replace it line for line.
+# the helper expects, and the pat.identity collection it runs locally. RETIRING: linux/build-deb.sh now
+# builds the package (same layout, from linux/vendor). Delete this once the first published .deb is proven on a device.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }

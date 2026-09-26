@@ -1,0 +1,70 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+# {{ ansible_managed }}
+# pat.identity.sssd_ad_join -- full AD provider. Unlike the id-only role's
+# sssd.conf, this file holds NO secret: the AD provider authenticates with the
+# machine account KEYTAB (/etc/krb5.keytab) via GSSAPI, not a bind password.
+[sssd]
+# No config_file_version: 2 is the default on every SSSD 2.x, and SSSD 2.12 (Ubuntu 26.04) REJECTS the
+# option ("Attribute 'config_file_version' is not allowed in section 'sssd'") - sssctl config-check then
+# fails the play. Checked with sssctl in ubuntu:24.04 (2.9.4) and ubuntu:26.04 (2.12.0) containers: the
+# file is clean on both without it (pat-platform RCA-62).
+domains = {{ pat_identity_ad_domain }}
+{% if not _pat_sssd_socket_activated | default(false) | bool %}
+services = nss, pam
+{% else %}
+# responders are socket-activated on this host (systemd sssd-*.socket) - no services line
+{% endif %}
+
+[nss]
+fallback_homedir = {{ pat_identity_fallback_homedir }}
+default_shell = {{ pat_identity_shell_fallback }}
+
+[pam]
+# offline_credentials_expiration MUST live here in [pam], NOT [domain] --
+# sssctl config-check rejects it in [domain] (the defect the id-only role hit).
+# It caps how long a cached credential is valid for OFFLINE auth. 0 = never
+# expires while offline: an engineer can still sign in during a DC outage.
+offline_credentials_expiration = {{ pat_identity_offline_credentials_expiration }}
+
+[domain/{{ pat_identity_ad_domain }}]
+# --- provider: AD does id AND auth (the counterpart to id-only's auth=none) --
+id_provider = ad
+auth_provider = ad
+chpass_provider = ad
+# access gated at the SSSD layer (a group, and/or named users on a laptop); pam_profile enforces the same
+# list at the PAM account phase (simple_allow_groups mode). Both, deliberately.
+access_provider = simple
+{% if pat_identity_login_access_group | length > 0 %}
+simple_allow_groups = {{ pat_identity_login_access_group }}
+{% endif %}
+{% if pat_identity_login_access_users | length > 0 %}
+simple_allow_users = {{ pat_identity_login_access_users | join(', ') }}
+{% endif %}
+
+ad_domain = {{ pat_identity_ad_domain }}
+krb5_realm = {{ pat_identity_ad_realm }}
+# joined-with-ADCLI: every join this role makes is adcli's (--client-software=sssd, or --one-time-password),
+# and realmd reads this tag to decide how to LEAVE - "samba" would send `realm leave` down the net-ads path
+# on a host never joined with samba (pat-platform #206). It is what realmd itself writes.
+realmd_tags = manages-system joined-with-adcli
+{% if pat_identity_ad_dyndns_update | string | length > 0 %}
+dyndns_update = {{ pat_identity_ad_dyndns_update | bool | string | lower }}
+{% endif %}
+
+# --- caching: the login-host capability id-only omits ----------------------
+cache_credentials = {{ pat_identity_cache_credentials | string | lower }}
+# keep the Kerberos TGT password hash for offline auth during a DC outage.
+krb5_store_password_if_offline = true
+entry_cache_timeout = {{ pat_identity_entry_cache_timeout }}
+
+# --- identity: AD's real uidNumber/gidNumber (RFC2307), NOT SID mapping -----
+# The numeric IDs are the shared-storage access contract (ADR 0003) -- the same
+# values the id-only compute nodes resolve, so a file written on one is correctly
+# owned on the other.
+ldap_id_mapping = {{ pat_identity_ldap_id_mapping | string | lower }}
+ldap_schema = ad
+
+# short login names ('satishs'), not satishs@{{ pat_identity_ad_domain }}
+use_fully_qualified_names = {{ pat_identity_use_fully_qualified_names | string | lower }}
+fallback_homedir = {{ pat_identity_fallback_homedir }}
+default_shell = {{ pat_identity_shell_fallback }}

@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# pat.identity.pam_profile -- create a home directory on first login.
+Name: PAT create home directory on login
+Default: yes
+Priority: 128
+Session-Type: Additional
+Session:
+	required	pam_mkhomedir.so umask=0077 skel=/etc/skel

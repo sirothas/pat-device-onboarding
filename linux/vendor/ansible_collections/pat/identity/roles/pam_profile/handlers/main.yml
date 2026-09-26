@@ -1,0 +1,18 @@
+---
+# Role-prefixed handlers (ADR 0004). They fire only when a config task reported
+# 'changed', so a steady-state converge notifies nothing and the role stays
+# idempotent (the Molecule idempotence step depends on this).
+
+# RedHat: regenerate /etc/pam.d/* and nsswitch from the edited custom profile.
+- name: pat_identity_pam_apply_changes
+  ansible.builtin.command:
+    cmd: authselect apply-changes
+  changed_when: true
+
+# Debian: recompose the common-* stacks from the pam-config fragments.
+- name: pat_identity_pam_run_auth_update
+  ansible.builtin.command:
+    cmd: pam-auth-update --package
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: true

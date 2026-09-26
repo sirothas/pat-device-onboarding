@@ -1,0 +1,77 @@
+---
+# pat.identity.sssd_ad_join -- full AD domain join for interactive + infra hosts
+# (login, controller, DBD). The COUNTERPART to sssd_ldap_idonly: this host
+# AUTHENTICATES (id_provider=ad, auth_provider=ad, a computer object + keytab),
+# where the id-only role deliberately does not. See README for the asymmetry.
+
+# --- realm / join ----------------------------------------------------------
+# The AD DNS domain (realm), e.g. ad.example.com. Set from the env-wide
+# pat_ad_domain in group_vars. The Kerberos realm is its upper-case form.
+pat_identity_ad_domain: "{{ pat_ad_domain | default('') }}"
+pat_identity_ad_realm: "{{ pat_ad_realm | default((pat_ad_domain | default('')) | upper) }}"
+
+# The OU the computer object is CREATED IN. Must be the delegated Linux OU
+# (ou-structure.md: the join account's create-computer rights are scoped to
+# OU=Linux and inherit), NOT wherever the default lands -- the CA build showed
+# what a Quarantine/default-Computers landing costs. No default: set per env.
+pat_identity_ad_computer_ou: ""
+
+# The account that performs the join (plain SamAccountName) + the secret NAME
+# (under pat_secret_prefix) holding its password. Read via pat.base.secret on
+# the CONTROLLER, no_log. Needs delegated create/reset-computer rights on
+# pat_identity_ad_computer_ou only -- never Domain Admin (sa-unixadintegration).
+pat_identity_ad_join_account: sa-unixadintegration
+pat_identity_ad_join_password_secret: "ad/sa_unixadintegration_password"
+
+# One-time-password join (pat-platform ADR 0058: remote Ubuntu company laptops). The broker has
+# PRE-CREATED this host's computer object and set this password on it; realm/adcli claim the object
+# with it and rotate the password at once. When set, NO join account is used - _ad_computer_ou,
+# _ad_join_account and _ad_join_password_secret are not needed (the object already exists). Pass it
+# at run time (-e / a vars file on tmpfs), never in inventory: it is a credential until it is used.
+pat_identity_ad_join_otp: ""
+
+# dyndns_update for the AD domain. Empty = leave SSSD's default (AD provider: true) - servers unchanged.
+# A laptop sets false: its address is its pooled tunnel address (pat-platform #207).
+pat_identity_ad_dyndns_update: ""
+
+# --- access + names --------------------------------------------------------
+# ONLY this AD group may log in (SSSD access_provider=simple). pam_profile
+# (simple_allow_groups mode) enforces the same group at the PAM account phase.
+pat_identity_login_access_group: u_hpc_login_access
+# Per-USER allow list (simple_allow_users), for a host that belongs to people rather than a host
+# class - a company laptop allows its assigned employee (ADR 0058). Either this or the group, or both.
+pat_identity_login_access_users: []
+pat_identity_use_fully_qualified_names: false        # log in as 'satishs', not satishs@dom
+pat_identity_shell_fallback: /bin/bash
+pat_identity_fallback_homedir: /home/%u
+
+# --- caching ---------------------------------------------------------------
+# THE ASYMMETRY vs sssd_ldap_idonly (see README): a login host CACHES
+# credentials so an engineer can still sign in during a brief DC outage.
+pat_identity_cache_credentials: true
+# How long a cached credential stays valid for OFFLINE auth. 0 = never expires
+# while offline (the DC-outage capability). Rendered in the [pam] section, NOT
+# [domain] -- sssctl config-check rejects it in [domain] (the defect the id-only
+# role hit). Set a bounded value (days) if policy wants offline creds to age out.
+pat_identity_offline_credentials_expiration: 0
+pat_identity_entry_cache_timeout: 5400               # 90 min (default)
+
+# Use AD's own uidNumber/gidNumber (RFC2307), NOT SID algorithmic mapping --
+# the numeric IDs are the shared-storage access contract (ADR 0003), identical
+# to what the id-only compute nodes resolve. realm join gets --automatic-id-
+# mapping=no to match.
+pat_identity_ldap_id_mapping: false
+
+# Manage /etc/resolv.conf to point at the DCs (a joining host must resolve the
+# domain's SRV records; the VPC resolver does not know the AD zone). Same
+# rationale as the id-only role. false where DNS is handled another way.
+pat_identity_manage_resolv_conf: true
+
+# Perform the realm join. A real seam, not a molecule hack: set false to manage
+# SSSD config on an ALREADY-joined host (e.g. one the linux-login-host module
+# joined at build, or a container that cannot reach a DC) -- the role then does
+# packages + our sssd.conf + config-check + restart, but skips the join itself.
+# Default true: a bare host converged by this role joins. (Also guarded by
+# "already joined?" -- with perform_join=true a joined host is still not
+# re-joined.)
+pat_identity_ad_perform_join: true

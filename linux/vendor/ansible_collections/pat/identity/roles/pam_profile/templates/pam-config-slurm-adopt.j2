@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# pat.identity.pam_profile -- adopt a session into the user's running job.
+Name: PAT Slurm adopt (pam_slurm_adopt)
+Default: yes
+Priority: 128
+Session-Type: Additional
+Session:
+	optional	pam_slurm_adopt.so action_no_jobs={{ pat_identity_slurm_adopt_action_no_jobs }}

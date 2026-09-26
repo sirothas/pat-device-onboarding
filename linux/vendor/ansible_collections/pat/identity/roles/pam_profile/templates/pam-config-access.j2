@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# pat.identity.pam_profile -- group-gated login via pam_access.
+Name: PAT access control (pam_access)
+Default: yes
+Priority: 256
+Account-Type: Additional
+Account:
+	required	pam_access.so accessfile={{ pat_identity_access_file }} listsep=,

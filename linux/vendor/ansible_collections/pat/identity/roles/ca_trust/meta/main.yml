@@ -1,0 +1,25 @@
+---
+galaxy_info:
+  role_name: ca_trust
+  namespace: pat
+  author: Parvati Axis Technologies Pvt Ltd
+  description: >-
+    Install and refresh CA trust anchors in the OS trust store so that LDAPS
+    (and any other TLS the host initiates) validates against the client's PKI.
+    Required before pat.identity.sssd_ldap_idonly / sssd_ad_join, which fail
+    closed on an untrusted chain.
+  license: Proprietary
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions: ["9"]
+    # 'all' is the schema-safe value: ansible-lint's galaxy platform enum lags
+    # real release codenames. Supported-release truth is in the description.
+    - name: Ubuntu
+      versions: ["all"]
+    - name: Debian
+      versions: ["all"]
+  galaxy_tags: [identity, pki, tls, ldaps]
+# No dependencies: this role is the thing the SSSD roles depend on, not the
+# reverse. It is independently testable in Molecule with a throwaway anchor.
+dependencies: []

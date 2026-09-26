@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# pat.identity.sssd_ad_join -- a joining host must resolve the AD domain's SRV
+# records, so pin the DCs. The DCs forward unknown queries to the VPC resolver,
+# so cloud endpoints still resolve. DC order follows pat_ad_domain_controllers
+# (in-AZ DC first). NetworkManager is dns=none so it will not overwrite this.
+search {{ pat_ad_domain }}
+{% for dc in pat_ad_domain_controllers %}
+nameserver {{ dc.ip }}
+{% endfor %}

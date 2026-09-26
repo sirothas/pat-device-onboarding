@@ -1,0 +1,206 @@
+---
+# ===========================================================================
+# pat.identity.sssd_ldap_idonly
+#
+# ADR 0004: an ephemeral compute node RESOLVES identity but never
+# AUTHENTICATES. id_provider = ldap, auth_provider = none. No computer
+# object, no Kerberos, no realm join. A running job must survive a directory
+# outage, so identity is served from a generous offline cache.
+#
+# Structured as a variation on pat.base.bootstrap: platform assertion, then
+# the first_found vars ladder, then OS-agnostic task bodies. The only
+# per-family content is package/service names in vars/<Family>.yml.
+#
+# SEQUENCE: this role must run AFTER pat.identity.ca_trust. SSSD talks LDAPS
+# with ldap_tls_reqcert=demand, so the DC's CA chain must already be in the
+# system trust store or SSSD fails closed -- the node comes up with no
+# identity at all, which is safer than trusting an unverified directory.
+# The assert below makes that ordering LOAD-BEARING, not just documented: a
+# comment is not a dependency (this role converged failed=0 on cn01 with no
+# anchor present and resolved nobody -- the whole identity plane silently
+# offline). Explicit over meta-dep is the platform convention, so play
+# composition must carry ca_trust; this assert fails loud if it did not.
+# ===========================================================================
+
+- name: Assert the platform is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['RedHat', 'Debian']
+    fail_msg: >-
+      pat.identity.sssd_ldap_idonly supports the RedHat and Debian families
+      only. Detected os_family={{ ansible_os_family }}
+      distribution={{ ansible_distribution }} {{ ansible_distribution_version }}.
+      Add a vars/<family>.yml and extend this assertion -- do not scatter
+      conditionals through the task bodies.
+    quiet: true
+  tags: [always]
+
+# Fail LOUD if ca_trust has not run: LDAPS with reqcert=demand goes silently
+# offline without the anchor, so assert a managed anchor is present BEFORE
+# deploying sssd.conf. Turns "resolves nobody, no error" into a clear message.
+# Same instinct as pam_profile's PrologFlags=Contain assert.
+- name: Find CA trust anchors this platform's ca_trust would have installed
+  ansible.builtin.find:
+    paths: "{{ pat_identity_ca_trust_dir | default('/etc/pki/ca-trust/source/anchors') }}"
+    patterns: "pat-ca-*.crt"
+  register: _pat_ca_anchors
+  tags: [always]
+
+- name: Assert the DC CA trust anchor is present (pat.identity.ca_trust ran first)
+  ansible.builtin.assert:
+    that:
+      - _pat_ca_anchors.matched | int > 0
+    fail_msg: >-
+      No pat-ca-*.crt trust anchor found in
+      {{ pat_identity_ca_trust_dir | default('/etc/pki/ca-trust/source/anchors') }}.
+      pat.identity.ca_trust must run on this host BEFORE sssd_ldap_idonly --
+      without the DC's CA in the trust store, LDAPS (reqcert=demand) fails
+      closed and SSSD comes up OFFLINE with no identity resolution (converge
+      still reports success -- this is exactly that trap). Add ca_trust to the
+      compute identity play in site.yml, before this role.
+    quiet: true
+  tags: [always]
+
+- name: Load OS-family variables
+  ansible.builtin.include_vars: "{{ lookup('ansible.builtin.first_found', _params) }}"
+  vars:
+    _params:
+      files:
+        - "{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_distribution }}.yml"
+        - "{{ ansible_os_family }}.yml"
+        - "default.yml"
+      paths:
+        - "vars"
+  tags: [always]
+
+# Fail fast on missing directory inputs, with a message that says where they
+# live. LDAPS is mandatory: an ldap:// URI would send the bind password in
+# clear, so it is refused here rather than trusted to the operator.
+- name: Assert the required directory inputs are present and LDAPS
+  ansible.builtin.assert:
+    that:
+      - pat_identity_ldap_uri is defined
+      - pat_identity_ldap_uri | length > 0
+      - pat_identity_ldap_uri is match('^ldaps://')
+      - pat_identity_ldap_bind_dn_secret is defined
+      - pat_identity_ldap_bind_pw_secret is defined
+      - pat_identity_ldap_user_search_base is defined
+      - pat_identity_ldap_user_search_base | length > 0
+      - pat_identity_ldap_group_search_base is defined
+      - pat_identity_ldap_group_search_base | length > 0
+    fail_msg: >-
+      sssd_ldap_idonly needs pat_identity_ldap_uri (must be ldaps://...), the
+      bind DN/password secret names, and the user and group search bases. Set
+      them in inventories/<env>/group_vars for the compute host class. ldap://
+      is refused -- the bind credential must never cross the wire in clear.
+    quiet: true
+  tags: [always]
+
+# --- AD DNS resolution for a NON-JOINED node --------------------------------
+# A compute node is identity-only and never realm-joins, so nothing points it
+# at the DCs -- it uses the VPC resolver, which does NOT resolve the AD DNS zone,
+# and SSSD's LDAPS to the DC FQDN fails with "name or service not known" (the
+# backend goes offline and resolves nobody). We pin the DC nameservers here.
+# WHY resolv.conf and not a Route 53 Resolver forwarding rule: that construct is
+# for forwarding OUT of a VPC to external/on-prem DNS; where the DCs are IN the
+# same VPC and directly reachable it is ~2 ENIs of standing cost to reach a
+# server a couple of subnets away. Provided the DCs forward unknown queries back
+# to the VPC resolver (verify per environment), cloud service endpoints (e.g.
+# the SSM management channel and the NAS) still resolve through them.
+# NetworkManager is set dns=none so it does not overwrite our file on the next
+# network event or reboot.
+- name: Assert the DC list is available to pin resolv.conf
+  ansible.builtin.assert:
+    that:
+      - pat_ad_domain is defined and pat_ad_domain | length > 0
+      - pat_ad_domain_controllers is defined and pat_ad_domain_controllers | length > 0
+    fail_msg: >-
+      sssd_ldap_idonly manages resolv.conf on this non-joined node and needs
+      pat_ad_domain + pat_ad_domain_controllers (name/ip, DC2 first) from the
+      environment group_vars. Set them, or set pat_identity_manage_resolv_conf=false
+      if DNS is handled another way on this host class.
+    quiet: true
+  when: pat_identity_manage_resolv_conf | bool
+
+- name: Stop NetworkManager owning /etc/resolv.conf (so the DC pin survives reboots)
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/90-pat-dns-none.conf
+    content: |
+      # pat.identity.sssd_ldap_idonly: this non-joined node pins the DC
+      # nameservers in /etc/resolv.conf; dns=none stops NM overwriting them.
+      [main]
+      dns=none
+    owner: root
+    group: root
+    mode: "0644"
+  register: _pat_nm_dns
+  when: pat_identity_manage_resolv_conf | bool
+
+- name: Reload NetworkManager so dns=none takes effect BEFORE resolv.conf is written
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+  when: pat_identity_manage_resolv_conf | bool and _pat_nm_dns is changed
+
+- name: Pin this compute node's resolver at the domain controllers
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: pat_identity_manage_resolv_conf | bool
+
+- name: Install SSSD and LDAP client packages
+  ansible.builtin.package:
+    name: "{{ pat_identity_sssd_packages }}"
+    state: present
+  register: _pat_pkg
+  until: _pat_pkg is succeeded
+  retries: 3
+  delay: 10
+
+# The DN is treated as a secret too (the inventory stores it via the secret
+# backend): leaking the service-account DN hands an attacker half the bind.
+# no_log so neither value reaches the log or a --diff.
+- name: Fetch the read-only bind DN and password
+  ansible.builtin.set_fact:
+    _pat_ldap_bind_dn: "{{ lookup('pat.base.secret', pat_identity_ldap_bind_dn_secret) }}"
+    _pat_ldap_bind_pw: "{{ lookup('pat.base.secret', pat_identity_ldap_bind_pw_secret) }}"
+  no_log: true
+
+- name: Ensure /etc/sssd exists
+  ansible.builtin.file:
+    path: /etc/sssd
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+# 0600 root:root: the rendered file contains the bind password. no_log on the
+# task because template diffs would otherwise print the secret.
+- name: Deploy sssd.conf (identity-only, LDAPS)
+  ansible.builtin.template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: pat_sssd_ldap_idonly_restart_sssd
+
+# Validate before we (re)start. sssctl ships in sssd-tools. A broken config
+# here is caught now, not at 02:00 when a node boots with no identity.
+- name: Validate the SSSD configuration
+  ansible.builtin.command:
+    cmd: sssctl config-check
+  register: _pat_sssctl
+  changed_when: false
+  failed_when: _pat_sssctl.rc != 0
+
+- name: Ensure SSSD is enabled and running
+  ansible.builtin.service:
+    name: "{{ pat_identity_sssd_service }}"
+    state: started
+    enabled: true

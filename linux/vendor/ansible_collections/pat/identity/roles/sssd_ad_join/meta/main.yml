@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  role_name: sssd_ad_join
+  namespace: pat
+  author: PAT
+  description: >-
+    Full AD domain join (computer object, Kerberos keytab, id + auth) for
+    interactive and infrastructure hosts. Counterpart to sssd_ldap_idonly.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: EL
+      versions: ["9"]
+    # 'all' is the schema-safe value: ansible-lint's galaxy platform enum lags
+    # real release codenames. Supported-release truth is in the description.
+    - name: Ubuntu
+      versions: ["all"]
+    - name: Debian
+      versions: ["all"]
+dependencies: []
