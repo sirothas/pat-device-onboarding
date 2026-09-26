@@ -8,3 +8,5 @@ out/
 !installer/**/*.wxs
 TestResults/
 .wix/
+__pycache__/
+*.pyc
